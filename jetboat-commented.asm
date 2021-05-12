@@ -124,7 +124,7 @@ dummy_graphics_buffer_start = $0A00
         STA     zp_graphics_tiles_storage_lsb
         LDA     #$06
         STA     zp_graphics_tiles_storage_lsb
-        ; Each edge of screen needs 39 map tiles
+        ; In Mode 5 the screen is $27 / 39
         LDX     #$27
 .L0BB6
         JSR     fn_get_xy_tile_graphic_address
@@ -155,12 +155,14 @@ dummy_graphics_buffer_start = $0A00
         LDA     zp_graphics_tiles_storage_lsb
         ADC     #$00
         STA     zp_graphics_tiles_storage_lsb
-        
-        ; DUNNO YET
+
+        ; Loop until we have loaded all the map tiles
+        ; up to FF
         INC     zp_map_pos_y
         BIT     zp_map_pos_y
         BPL     L0BD9
 
+        ; Reset the y position to 0
         LDA     #$00
         STA     zp_map_pos_y
 .L0BD9
@@ -356,10 +358,10 @@ dummy_graphics_buffer_start = $0A00
         LDA     #$05
         JSR     OSWRCH
 
-        ; Put 0A in variable 5
-        ; Not used in the next JSRs 
+        ; Set the sound duration offset
+        ; lookup to 10
         LDA     #$0A
-        STA     L0005
+        STA     zp_sound_duration_offset
 
         ; Set the screen to black
         JSR     fn_set_colours_to_black
@@ -462,12 +464,14 @@ dummy_graphics_buffer_start = $0A00
         LDA     #$05
         JSR     set_timer_64ms   
         
-        JSR     L1762
+        JSR     fn_play_boat_sounds
 
 .L0D16
-        LDA     L0005
+        LDA     zp_sound_duration_offset
         STA     zp_scroll_map_steps
 .L0D1A
+        ; Check to see if there is any remaining time
+        ; left - continure if there is, otherwise branch ahead
         LDA     zp_time_remaining_secs
         BNE     L0D60
 
@@ -498,6 +502,7 @@ dummy_graphics_buffer_start = $0A00
         INX
         JSR     OSBYTE
 
+        ; OSBYTE &07
         ; Sound command
         LDX     #first_sound MOD 256
         LDY     #first_sound DIV 256
@@ -518,7 +523,40 @@ dummy_graphics_buffer_start = $0A00
         JSR     L1797
 
         JMP     main_game_loop
-;0D60              
+;0D60    
+
+.L0D60
+        ; Show get ready icon?
+        JSR     L128D
+
+        JSR     fn_play_boat_sounds
+
+        DEC     zp_scroll_map_steps
+        BPL     L0D1A
+
+        LDA     zp_sound_duration_offset
+        CMP     #$0A
+        BCS     L0D7E
+
+        INC     L0007
+        LDA     L0007
+        CMP     #$03
+        BCC     L0D7E
+
+        LDA     #$00
+        STA     L0007
+        INC     zp_sound_duration_offset
+.L0D7E
+        JSR     L1415
+
+        JSR     L1451
+
+        JSR     L0D98
+
+        LDA     zp_current_stage
+        BEQ     L0D8E
+
+        JMP     L0C57
 ;....
 
 ; changing the screen start address?
@@ -1512,16 +1550,18 @@ dummy_graphics_buffer_start = $0A00
         TXA
         PHA
 
+        ; OSWORD &07
         ; Play completed lap sound
         ; Parameters are stored at $175A
+        ; All sounds use Envelope 2 (2nd parameter)
         ; SOUND 2, 2, 193, 2
         ; SOUND 2, 2, 189, 2
         ; SOUND 2, 2, 193, 4
         ; SOUND 2, 2, 145, 4
         ; SOUND 2, 2, 145, 3
         LDA     #$07
-        LDX     #sound_completed_lap MOD 256
-        LDY     #sound_completed_lap DIV 256
+        LDX     #sound_completed_lap DIV 256
+        LDY     #sound_completed_lap MOD 256
         JSR     OSWORD
 
         ; Restore the X index value
@@ -1556,6 +1596,79 @@ dummy_graphics_buffer_start = $0A00
 .sound_completed_lap_duration
         ; Duration (LSB MSB)
         EQUB    $00,$00
+
+;1762
+.fn_play_boat_sounds
+        ; OSWORD &07
+        ; Play a sound - first boat 'put'
+        ; Parameters are stored at $177C
+        ; Sound 10, 0, 246, 245
+        ; Sounds 10:
+        ;   1 - Flush the channel and play this sound immediately
+        ;   0 - Play on channel 0
+        LDX     #sound_boat_move_first MOD 256
+        LDY     #sound_boat_move_first DIV 256
+        LDA     #$07
+        JSR     OSWORD
+        
+        ; OSWORD &07
+        ; Play a sound - second boat 'put'
+        ; Duration depends on speed - duration is looked up 
+        ; in a table
+        ; Parameters are stored at $1784
+        ; Sound 10, 0, 246, 245
+        ; Sounds 10:
+        ;   1 - Flush the channel and play this sound immediately
+        ;   0 - Play on channel 0
+        LDX     zp_sound_duration_offset
+        LDA     duration_lookup_sound_x2,X
+        STA     sound_x2_duration + 1
+        LDX     #sound_boat_move_second MOD 256
+        LDY     #sound_boat_move_second DIV 256
+        LDA     #$07
+        JMP     OSWORD
+
+; 177C
+.sound_boat_move_first
+        ; First boat moving "put"
+        ; SOUND 2, 2, d, p
+        ; d and p are changed programmatically
+        EQUB    $10,$00
+        EQUB    $F6,$FF
+
+.sound_boat_move_first_pitch
+        ; Pitch (LSB MSB) 
+        EQUB    $03,$00
+
+.sound_boat_move_first_duration
+        ; Duration (LSB MSB)
+        EQUB    $E8,$03
+
+; 1784
+.sound_boat_move_second
+        ; Second boat moving "put"
+        ; d and p are changed programmatically
+        ; SOUND 2, 2, d, p
+        EQUB    $11,$00
+        EQUB    $03,$00
+;1788
+.sound_boat_move_second_pitch
+        ; Pitch (LSB MSB)
+        ; TODO Pitch controlled by Envelope 3? 
+        EQUB    $00,$00
+
+.sound_boat_move_second_duration
+        ; Duration (LSB MSB)
+        EQUB    $0A,$00  
+
+; 178C
+.duration_lookup_sound_table
+        ; As the boat goes faster, reduce
+        ; the duration of the second sound
+        ; From $6E (110) to $19 (25)
+        EQUB    $6E,$6E,$69,$5F,$55,$4B
+        EQUB    $41,$37,$2D,$23,$19
+; ....
 
 .fn_display_high_score_table
         ; Switch to MODE 7

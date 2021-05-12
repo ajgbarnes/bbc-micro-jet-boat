@@ -245,9 +245,9 @@ dummy_graphics_buffer_start = $0A00
         ; 0063
         ; 0064
         LDA     #$00
-        STA     L0003
-        STA     L0004
-        STA     L0006
+        STA     zp_turn_left_counter
+        STA     zp_display_digits
+        STA     zp_acceleration_counter
         STA     L0007
         STA     zp_score_lsb
         STA     zp_score_msb
@@ -295,9 +295,10 @@ dummy_graphics_buffer_start = $0A00
         INX
         JSR     OSBYTE 
 
-        ; More variable set up
+        ; Default the boat to pointing down the screen
+        ; Value is from 0 to 16
         LDA     #$08
-        STA     L0002
+        STA     zp_boat_direction
 
         ; MSB / LSB address? 0B75
         LDA     #$75
@@ -322,7 +323,8 @@ dummy_graphics_buffer_start = $0A00
         LDA     #vdu_23_hide_cursor_params MOD 256
         STA     zp_vdu_23_hide_cursor_params_lsb
 
-        ; Set these to FF
+        ; TODO 
+        ; Set these to $FF / 255
         LDA     #$FF
         STA     L0079
         STA     L000F
@@ -347,6 +349,7 @@ dummy_graphics_buffer_start = $0A00
         CPX     #$0B
         BNE     some_loop
 
+        ;TODO 
         ; Set variable 2A to 0
         LDA     #$00
         STA     L002A
@@ -560,6 +563,19 @@ dummy_graphics_buffer_start = $0A00
 
         JMP     L0C57
 ;....
+;0D91
+.fn_read_key
+        ; OSBYTE &81
+        ; Scan keyboard for keypress of key in X
+        ; X - negative inkey value of key
+        ; Y - always $FF
+        ;
+        ; On return X and Y will contain $FF if
+        ; it was being pressed
+        LDY     #$FF
+        LDA     #$81
+        JMP     OSBYTE
+;...
 
 ; changing the screen start address?
 ; screen start address must be divided by 8 
@@ -638,7 +654,7 @@ dummy_graphics_buffer_start = $0A00
 
 
 ;$0F2F
-.fn_get_joystick_x
+.fn_check_joystick_left
 	; OSBYTE &80 reads the ADC chip
 	; Reading channel 1 the x axis of the joystick
 	; This part checks for left
@@ -646,7 +662,6 @@ dummy_graphics_buffer_start = $0A00
         LDA     #$80
         JSR     OSBYTE
 
-.check_joystick_left
 	; If the joystick MSB value > F5 (max FF) then assume user
 	; is trying to go left
         CPY     #$F5
@@ -899,6 +914,314 @@ dummy_graphics_buffer_start = $0A00
         RTS        
 ;....
 
+
+
+;L128D
+.fn_check_keys_and_joystick
+        ; Read key presses and joystick 
+        ; and turn or accelerate boat
+        ;  TODO 
+        JSR     L1308
+
+        ; Check if the S key has been pressed
+        ; and turn the sound on if it was
+        JSR     check_s_key
+
+        ; Check if the F key has been pressed
+        ; and freeze the game if it has
+        JSR     check_f_key
+
+        ; Disable maskable interrupts
+        SEI
+
+        ; Wait 20ms
+        JSR     fn_wait_20_ms
+
+        ; Remove the Get Ready icon
+        ; And remove the boat? 
+        JSR     fn_toggle_get_ready_icon
+
+        ; Check to see if the joystick
+        ; is pushed left
+        JSR     fn_check_joystick_left
+        BNE     turn_left_detected
+
+.read_left_key
+        ; Check to see if the turn left key has been pressed
+        ; The value is changed programmatically to be 
+        ; the user defined or default key from the loading
+        ; menus - defaults to be caps lock from the menus
+        ; but Z in the code below
+        ; INKEY value is 2-complements so to get value
+        ; ((FF - 9E) + 1) * -1
+        LDX     #$9E
+left_key_game = read_left_key+1
+        JSR     fn_read_key
+
+        ; If key is being pressed then X will be $FF
+        CPX     #$FF
+        ; If it wasn't then branch ahead to check right
+        BNE     check_right
+
+;L12AB
+.turn_left_detected
+        ; Detects left key press 6 times in a row
+        ; before doing anything - so we don't turn too
+        ; fast
+        INC     zp_turn_left_counter
+        LDA     zp_turn_left_counter
+
+        ; If the we haven't detected left 6 times
+        ; do nothing (branch ahead)        
+        CMP     #$06
+        BCC     check_right
+
+        ; Reset the left key detection 
+        LDA     #$00
+        STA     zp_turn_left_counter
+
+        ; Increment the left counter
+        LDA     zp_boat_direction
+        CLC
+        ADC     #$01
+
+        ; Maximum value is 16 (assume rotation by 360/16 = 27)
+        ; as it's a 4-bit counter. Effectively increments the 
+        ; counter and wraps around at $0F / 16
+        AND     #$0F
+        STA     zp_boat_direction
+;L12C0
+.check_right
+        ; Check to see if the joystick
+        ; is pushed right
+        JSR     fn_check_joystick_right
+        BNE     turn_right_detected
+.read_right_key
+        ; Check to see if the turn right key has been pressed
+        ; The value is changed programmatically to be 
+        ; the user defined or default key from the loading
+        ; menus - defaults to be Ctrl from the menus
+        ; but Z in the code below
+        LDX     #$BD
+right_key_game = read_right_key+1
+        JSR     fn_read_key
+
+        ; If key is being pressed then X will be $FF
+        ; If it wasn't then branch ahead to check accelerate
+        CPX     #$FF
+        BNE     check_accelerate
+
+;L12CE
+.turn_right_detected
+        ; Detects right key press 6 times in a row
+        ; before doing anything - so we don't turn too
+        ; fast
+        INC     zp_display_digits
+        LDA     zp_display_digits
+
+        ; If the we haven't detected right 6 times
+        ; do nothing (branch ahead)            
+        CMP     #$06
+        BCC     check_accelerate
+
+        ; Reset the right key detection 
+        LDA     #$00
+        STA     zp_display_digits
+
+        ; Maximum value is 16 (assume rotation by 360/16 = 27)
+        ; as it's a 4-bit counter. Effectively decrements
+        ; the counter and wraps around at $00 / 0
+        LDA     zp_boat_direction
+        CLC
+        ADC     #$0F
+        AND     #$0F
+        STA     zp_boat_direction
+
+;L12E3
+.check_accelerate
+        JSR     fn_check_joystick_button
+
+        BNE     L12F1
+
+.read_accelerate
+        ; Check to see if the accelerate key has been pressed
+        ; The value is changed programmatically to be 
+        ; the user defined or default key from the loading
+        ; menus - defaults to be Ctrl from the menus
+        ; but shift in the code below   
+        LDX     #$FF
+accel_key_game = read_accelerate+1
+        JSR     fn_read_key
+
+        ; If key is being pressed then X will be $FF
+        ; If it wasn't then branch ahead to check accelerate
+        CPX     #$FF
+        BNE     L1303
+
+;L12F1
+.accelerate_detected
+        ; Detects acceleration 6 times in a row
+        ; before doing anything - so we don't accelerate too
+        ; fast
+        ; TODO Are 05 and 06 both boat speed?
+        ; Is 6 acceleration?
+        INC     zp_acceleration_counter
+        LDA     zp_acceleration_counter
+
+        ; If the acceleration hasn't reached 6
+        ; do nothing (branch ahead)
+        CMP     #$06
+        BNE     redraw_screen
+
+        ; Set the acceleration to zero
+        ; So we don't do the next increment of
+        ; speed until we have detected 
+        LDA     #$00
+        STA     zp_acceleration_counter
+
+        ; Are we already at top speed ($00) 
+        ; Speed goes from 10 slow to 0 fast
+        LDA     zp_boat_speed
+        BEQ     redraw_screen
+
+        ; Increase speed by (counter-intuitively?)
+        ; reducing this variable
+        DEC     zp_boat_speed
+
+        ; TODO
+; 1303
+.redraw_screen
+        JSR     L11ED
+
+        ; Enable maskable interrupts and return
+        CLI
+        RTS
+
+.L1308
+        ; Depending on the value of L0002
+        ; times it by 2 and lookup where
+        ; we have to jump to based on a function
+        ; lookup table - store the function
+        ; value in L0065 and L0066 and jump
+        ; there
+        ;
+        ; L0002 starts at 8 so is 16 to begin with
+        ; L0002 is a four bit value (16 max)
+        ; L is incremented when you turn left
+        LDA     zp_boat_direction
+        ASL     A
+        TAX
+        LDA     boat_direction_fn_lookup,X
+        STA     zp_addr_fn_boat_direction_lsb
+        INX
+        LDA     boat_direction_fn_lookup,X
+        STA     zp_addr_fn_boat_direction_msb
+        JMP     (zp_addr_fn_boat_direction_lsb)
+
+.L131A
+        ; Function look up table?
+        EQUB    fn_boat_direction_0 MOD 256, fn_boat_direction_0 DIV 256
+        EQUB    fn_boat_direction_1 MOD 256, fn_boat_direction_1 DIV 256
+        EQUB    fn_boat_direction_2 MOD 256, fn_boat_direction_2 DIV 256
+        EQUB    fn_boat_direction_3 MOD 256, fn_boat_direction_3 DIV 256
+        EQUB    fn_boat_direction_4 MOD 256, fn_boat_direction_4 DIV 256
+        EQUB    fn_boat_direction_5 MOD 256, fn_boat_direction_5 DIV 256
+        EQUB    fn_boat_direction_6 MOD 256, fn_boat_direction_6 DIV 256
+        EQUB    fn_boat_direction_7 MOD 256, fn_boat_direction_7 DIV 256
+        EQUB    fn_boat_direction_8 MOD 256, fn_boat_direction_8 DIV 256
+        EQUB    fn_boat_direction_9 MOD 256, fn_boat_direction_9 DIV 256
+        EQUB    fn_boat_direction_10 MOD 256, fn_boat_direction_10 DIV 256
+        EQUB    fn_boat_direction_11 MOD 256, fn_boat_direction_11 DIV 256
+        EQUB    fn_boat_direction_12 MOD 256, fn_boat_direction_12 DIV 256
+        EQUB    fn_boat_direction_13 MOD 256, fn_boat_direction_13 DIV 256
+        EQUB    fn_boat_direction_14 MOD 256, fn_boat_direction_14 DIV 256
+        EQUB    fn_boat_direction_15 MOD 256, fn_boat_direction_15 DIV 256
+
+; 133A
+.boat_direction_fn_lookup
+.fn_boat_direction_0
+        ; Boat direction 0 - $133A
+        JSR     L13DA
+        JMP     L13BA
+
+        ; Boat direction 1 - $1340
+.fn_boat_direction_1
+        JSR     L13BA
+        JMP     L13D2
+
+.fn_boat_direction_2
+        ; Boat direction 2 - $1346
+        JSR     L13BA
+        JMP     L13CA
+
+.fn_boat_direction_3
+        ; Boat direction 3 - $134C
+        JSR     L13C2
+        JMP     L13CA
+
+.fn_boat_direction_4
+        ; Boat direction 4 - $1352
+        JSR     L13E5
+        JMP     L13CA
+
+.fn_boat_direction_5
+        ; Boat direction 5 - $1358
+        JSR     L13CA
+        JMP     L13A2
+        
+.fn_boat_direction_6
+        ; Boat direction 6 - $135E
+        JSR     L13CA
+        JMP     L139A
+
+.fn_boat_direction_7
+        ; Boat direction 7 - $1364
+        JSR     L13D2
+        JMP     L139A
+
+.fn_boat_direction_8
+        ; Boat direction 8 - $136A
+        JSR     L13DA
+        JMP     L139A
+
+.fn_boat_direction_9
+        ; Boat direction 9 - $1370
+        JSR     L13B2
+        JMP     L139A
+
+.fn_boat_direction_10
+        ; Boat direction 10 - $1376
+        JSR     L13AA
+        JMP     L139A
+
+.fn_boat_direction_11
+        ; Boat direction 11 - $137C
+        JSR     L13AA
+        JMP     L13A2
+
+.fn_boat_direction_12
+        ; Boat direction 12 - $1382
+        JSR     L13E5
+        JMP     L13AA
+
+.fn_boat_direction_13        
+        ; Boat direction 13 - $1388
+        JSR     L13AA
+        JMP     L13C2
+
+.fn_boat_direction_14
+        ; Boat direction 14 - $138E
+        JSR     L13AA
+        JMP     L13BA
+
+.fn_boat_direction_15
+        ; Boat direction 15 - $1394
+        JSR     L13B2
+        JMP     L13BA
+       
+;....
+
+;14B9
 .fn_colour_cycle_screen
         ; Cycle through the physical colours
         ; to make the screen flash when the boat is

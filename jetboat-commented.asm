@@ -358,10 +358,12 @@ dummy_graphics_buffer_start = $0A00
         LDA     #$05
         JSR     OSWRCH
 
-        ; Set the sound duration offset
-        ; lookup to 10
+        ; Set the boat speed to 10
+        ; Used to scroll the map and also
+        ; to change the duration of the boat 'put'
+        ; sound
         LDA     #$0A
-        STA     zp_sound_duration_offset
+        STA     zp_boat_speed
 
         ; Set the screen to black
         JSR     fn_set_colours_to_black
@@ -464,10 +466,10 @@ dummy_graphics_buffer_start = $0A00
         LDA     #$05
         JSR     set_timer_64ms   
         
-        JSR     fn_play_boat_sounds
+        JSR     fn_play_boat_soz
 
 .L0D16
-        LDA     zp_sound_duration_offset
+        LDA     zp_boat_speed
         STA     zp_scroll_map_steps
 .L0D1A
         ; Check to see if there is any remaining time
@@ -534,7 +536,7 @@ dummy_graphics_buffer_start = $0A00
         DEC     zp_scroll_map_steps
         BPL     L0D1A
 
-        LDA     zp_sound_duration_offset
+        LDA     zp_boat_speed
         CMP     #$0A
         BCS     L0D7E
 
@@ -545,7 +547,7 @@ dummy_graphics_buffer_start = $0A00
 
         LDA     #$00
         STA     L0007
-        INC     zp_sound_duration_offset
+        INC     zp_boat_speed
 .L0D7E
         JSR     L1415
 
@@ -1620,7 +1622,7 @@ dummy_graphics_buffer_start = $0A00
         ; Sounds 10:
         ;   1 - Flush the channel and play this sound immediately
         ;   0 - Play on channel 0
-        LDX     zp_sound_duration_offset
+        LDX     zp_boat_speed
         LDA     duration_lookup_sound_x2,X
         STA     sound_x2_duration + 1
         LDX     #sound_boat_move_second MOD 256

@@ -21,11 +21,12 @@ eventv_lsb_vector = $0220
 eventv_msb_vector = $0221
 mode7_start_addr = $7C00
 dummy_screen_start = $8000
-dummy_graphics_buffer_start = $0A00
+dummy_graphics_load_start = $8000
+graphics_buffer_start = $0A00
 mode_5_screen_centre =  $6A10
 
 ;L0B40
-. 
+.L0B40
         LDA     #$00
         STA     zp_graphics_tiles_storage_lsb
         LDA     #$09
@@ -245,7 +246,7 @@ mode_5_screen_centre =  $6A10
         LDA     #$0B
         STA     break_intercept_msb_vector
 
-.main_game_loop
+.restart_game
         ; Set memory to be cleared on Break 
         ; and disable escape key (*FX 200,3)
         ; OSBYTE &C8
@@ -282,9 +283,9 @@ mode_5_screen_centre =  $6A10
         ; 0064
         LDA     #$00
         STA     zp_turn_left_counter
-        STA     zp_display_digits
+        STA     zp_turn_right_counter
         STA     zp_acceleration_counter
-        STA     L0007
+        STA     zp_decelerate_counter
         STA     zp_score_lsb
         STA     zp_score_msb
         STA     L0019
@@ -296,7 +297,7 @@ mode_5_screen_centre =  $6A10
         STA     zp_current_lap
         STA     L0062
         STA     L0063
-        STA     zp_current_stage
+        STA     zp_stage_completed_status
 
         ; Look up the current lap time for completion
         LDX     zp_current_lap
@@ -316,8 +317,8 @@ mode_5_screen_centre =  $6A10
         LDA     #set_timer_64ms DIV 256
         STA     eventv_msb_vector
 
-        ; TODO add label
-.L0C57
+;L0C57
+.new_stage
         JSR     disable_interval_timer
 
         ; Clear sound channels - for some reason
@@ -414,7 +415,7 @@ mode_5_screen_centre =  $6A10
         JSR     init_graphics_buffers
 
         ; Load the current stage
-        LDA     zp_current_stage
+        LDA     zp_stage_completed_status
 
         ; Check if starting a new game or a new level
         BEQ     new_game_screen_text
@@ -429,7 +430,7 @@ mode_5_screen_centre =  $6A10
 .game_setup
         ; Reset current stage
         LDA     #$00
-        STA     zp_current_stage
+        STA     zp_stage_completed_status
 
         ; Set the game colours
         JSR     fn_set_game_colours
@@ -447,7 +448,8 @@ mode_5_screen_centre =  $6A10
         STA     L0023
 
         ; Map will be scrolled onto the screen 
-        ; using 40 steps (including 0)
+        ; using 40 steps (including 0) - this is because
+        ; in Mode 5 there are 40 columns of bytes
         LDA     #$27
         STA     zp_scroll_map_steps
 
@@ -472,6 +474,8 @@ mode_5_screen_centre =  $6A10
         LDA     #$03
         JSR     fn_wait_for_n_interrupts
 
+        ; Continue to scroll if we haven't 
+        ; moved fully into view
         DEC     zp_scroll_map_steps
         BPL     loop_scroll_map_start
 
@@ -505,14 +509,15 @@ mode_5_screen_centre =  $6A10
         LDA     #$05
         JSR     set_timer_64ms   
         
-        JSR     fn_play_boat_soz
+        JSR     fn_play_boat_sounds
 
-.L0D16
+;L0D16
+.main_game_loop
         LDA     zp_boat_speed
         STA     zp_scroll_map_steps
 .L0D1A
         ; Check to see if there is any remaining time
-        ; left - continure if there is, otherwise branch ahead
+        ; left - continue if there is, otherwise branch ahead
         LDA     zp_time_remaining_secs
         BNE     still_game_time_left
 
@@ -520,7 +525,7 @@ mode_5_screen_centre =  $6A10
 
         JSR     fn_wait_20_ms
 
-        JSR     fn_copy_graphics_from_buffer_to_screen
+        JSR     fn_copy_time_score_lap_to_screen
 
         JSR     L122F
 
@@ -564,9 +569,9 @@ mode_5_screen_centre =  $6A10
 
         JSR     L1797
 
-        JMP     main_game_loop
-;0D60    
+        JMP     restart_game
 
+;0D60    
 .still_game_time_left
         ; Check for keyboard or joystick input
         JSR     fn_check_keys_and_joystick
@@ -578,33 +583,49 @@ mode_5_screen_centre =  $6A10
         DEC     zp_scroll_map_steps
         BPL     L0D1A
 
+        ; Boat speed is from 0 to A
+        ; Check the boat speed - if we're at the minimum
+        ; speed then don't do anything, otherwise,
+        ; every three times around, reduce the speed
+        ; (counter intuitively by incrementing this variable)
+        ; 0A is the minimum, 00 is tha maximum
         LDA     zp_boat_speed
+        ; Are we at minimum speed of $0A (or higher!), if so branch
         CMP     #$0A
-        BCS     L0D7E
+        BCS     post_delecerate_check
 
-        INC     L0007
-        LDA     L0007
+        ; If we're beyond minimum speed, every third time around
+        ; the loop we'll slow down - means the player has to keep their
+        ; finger on accelerate to counter it.
+        INC     zp_decelerate_counter
+        LDA     zp_decelerate_counter
         CMP     #$03
-        BCC     L0D7E
+        BCC     post_delecerate_check
 
+        ; Third time around loop, decrease boat speed
         LDA     #$00
-        STA     L0007
+        STA     zp_decelerate_counter
         INC     zp_boat_speed
-.L0D7E
+;L0D7E
+.post_decelerate_check
         JSR     L1415
 
         JSR     L1451
 
         JSR     L0D98
 
-        LDA     zp_current_stage
-        BEQ     L0D8E
+        ; Check to see if the stage has been
+        ; completed - if it has go back to the the
+        ; initialisation part and show the congratulations
+        ; messages, if not, branch ahead
+        LDA     zp_stage_completed_status
+        BEQ     stage_not_complete
 
-        JMP     L0C57
+        JMP     new_stage
 
 ;0D8E
-. 
-        JMP     L0D16
+.stage_not_complete
+        JMP     main_game_loop
 
 ;0D91
 .fn_read_key
@@ -618,7 +639,164 @@ mode_5_screen_centre =  $6A10
         LDY     #$FF
         LDA     #$81
         JMP     OSBYTE
-;...
+
+.L0D98
+        ; Neat way to check to see if a memory
+        ; address is set in 7B/7C - if either
+        ; has a value, don't branch
+        LDA     L007C
+        EOR     L007B
+        BEQ     L0E12
+
+        ; Check to see if the value in L007B
+        ; is negative - if it's positive, branch
+        BIT     L007B
+        BPL     L0DCB
+
+        DEC     L0078
+        BPL     L0DAA
+
+        ; Set to 79 or 80
+        LDA     #$4F
+        STA     L0078   
+;
+.L0E12
+        ; Neat way to check to see if a memory
+        ; address is set in 7B/7C - if either
+        ; has a value, don't branch
+        LDA     L0079
+        EOR     L007A
+        BEQ     L0E85
+
+        ; Check to see if the value in L0079
+        ; is negative - if it's positive, branch
+        BIT     L0079
+        BPL     L0E58
+
+        ; If 77 is positive then branch...
+        INC     L0077
+        LDA     L0077
+        BPL     L0E26
+
+        LDA     #$00
+        STA     L0077
+
+.L0E26
+        ; When scrolling the screen to the left,
+        ; calculate where the top right pixels will be
+        ; Current screen start address + $140 / 320
+        ; That's where we're going to write the next
+        ; tile so update the routine with those values
+        CLC
+        LDA     zp_screen_start_lsb
+        ADC     #$40
+        STA     L0EFE
+        LDA     zp_screen_start_msb
+        ADC     #$01
+        ; Check the start address gone beyond $8000
+        ; and correct it if it did - only important
+        ; for the MSB not the LSB
+        JSR     fn_check_screen_start_address
+        STA     L0EFF
+
+        ; Move the screen left by 4 pixels / one byte
+        ; and update our screen address tracking variables
+        CLC
+        LDA     zp_screen_start_lsb
+        ADC     #$08
+        STA     zp_screen_start_lsb
+        LDA     zp_screen_start_msb
+        ADC     #$00
+        ; Check the start address gone beyond $8000
+        ; and correct it if it did - only important
+        ; for the MSB not the LSB
+        JSR     fn_check_screen_start_address
+        STA     zp_screen_start_msb
+
+        LDA     L0078
+        STA     zp_map_pos_x
+        LDA     L0077
+        CLC
+        ADC     #$27
+        AND     #$7F
+        STA     zp_map_pos_y
+        JSR     L0B40
+
+.L0E58
+        BIT     L007A
+        BPL     L0E85
+
+        DEC     L0077
+        BPL     L0E64
+
+        LDA     #$7F
+        STA     L0077
+.L0E64
+        ; Move the screen right by 4 pixels / one byte
+        ; Calculate the new screen start 
+        LDA     zp_screen_start_lsb
+        SEC
+        SBC     #$08
+        STA     zp_screen_start_lsb
+        STA     L0EFE
+        LDA     zp_screen_start_msb
+        SBC     #$00
+        ; Check the start address gone bel0w $5800
+        ; and correct it if it did        
+        JSR     fn_check_screen_start_address
+        STA     zp_screen_start_msb
+        STA     L0EFF
+
+        LDA     L0078
+        STA     zp_map_pos_x
+        LDA     L0077
+        STA     zp_map_pos_y
+        JSR     L0B40    
+
+.L0E85
+        JSR     fn_scroll_screen_up
+
+        SEI
+        JSR     fn_wait_20_ms
+
+        JSR     fn_set_6845_screen_start_addresss
+
+        LDA     L007C
+        EOR     L007B
+        BEQ     L0E98
+
+        JSR     L0F5B
+
+.L0E98
+        LDA     L0079
+        EOR     L007A
+        BEQ     L0EA1
+
+        JSR     L0EEC    
+
+.L0EA1
+
+;gets called 41 times on screen load
+        LDA     L000F
+        BMI     L0EAC
+
+        LDA     #$00
+        STA     L000C
+        JSR     L118A   
+
+.L0EAC
+        LDA     L000C
+        BMI     L0EB3
+
+        JSR     fn_copy_time_score_lap_to_screen
+
+.L0EB3
+        CLI
+        JSR     L10D6
+
+        JSR     L1645
+
+        RTS             
 
 ; changing the screen start address?
 ; screen start address must be divided by 8 
@@ -661,8 +839,6 @@ mode_5_screen_centre =  $6A10
         STA     LFE01
         RTS
 
-;....
-
 ;L0EDC
 .fn_wait_20_ms
         ; This waits function waits 20 ms for an 
@@ -693,8 +869,78 @@ mode_5_screen_centre =  $6A10
         LDA     #$82
         STA     SYS_VIA_INT_ENABLE
         RTS
-; ...
 
+.L0EEC
+        ; $0900 is the tile buffer
+        ; Write the load address 
+        LDA     #$00
+        STA     L0EFB
+        LDA     #$09
+        STA     L0EFC
+        LDX     #$1F
+.L0EF8
+        LDY     #$07
+.copy_graphics
+        LDA     dummy_graphics_load_start,Y
+L0EFB = L0EFA+1
+L0EFC = L0EFA+2
+.L0EFD
+        STA     dummy_screen_start,Y
+L0EFE = L0EFD+1
+L0EFF = L0EFD+2
+        DEY
+        BPL     L0EFA
+
+.L0F03
+        LDA     L0EFE
+L0F04 = L0F03+1
+
+        ; Moves the screen write address down a row
+        ; Each row is $0140 / 320 bytes 
+        ; So we add this to the current
+        ; write address
+        CLC
+        ADC     #$40
+        STA     L0EFE
+        LDA     L0EFF
+.L0F0F
+        ; Check to see if the screen start address
+        ; is greater than the top of screen memory
+        ; which is $8000
+        ADC     #$01
+        CMP     #$80
+        BCS     handle_screen_write_overflow
+
+        ; Check to see if the screen start address
+        ; is greater than or equals the bottom of screen 
+        ; memory which is $5800
+        CMP     #$58
+        BCS     L0F1F
+        
+        ; Underflow of write address so wrap it to the 
+        ; top of screen memory
+        ADC     #$28
+        BCC     L0F1F
+
+;L0F1D
+.handle_screen_write_overflow
+        ; Screen write address was higher than
+        ; top of screen memory, so loop it to the 
+        ; bottom of screen memory ($5800) by subtracting
+        ; $28 from $80 in the MSB of screen start address
+        SBC     #$28
+
+.L0F1F
+        STA     L0EFF
+        CLC
+        LDA     L0EFB
+        ADC     #$08
+        STA     L0EFB
+        DEX
+.L0F2C
+        BPL     L0EF8
+
+        RTS
 
 ;$0F2F
 .fn_check_joystick_left
@@ -867,27 +1113,27 @@ mode_5_screen_centre =  $6A10
         RTS
 
 ;L101E
-.fn_copy_graphics_from_buffer_to_screen
-        ; Self modifying code - locations
-        ; below default to 0A00 but could be 
-        ; changed by code before this.  These
-        ; values are used to indicate where to 
-        ; copy 8 bytes from in the graphics buffer
-        ; before writing to the screen. 
-        LDA     #dummy_graphics_buffer_start MOD 256
+.fn_copy_time_score_lap_to_screen
+        ; Copy the buffered graphics for the remaining time,
+        ; the score and the lap total to the screen
+        ;
+        ; All these graphics are buffered in $0A00 to $0B3F
+        LDA     #graphics_buffer_start MOD 256
         STA     load_from_graphics_buffer + 1
-        LDA     #dummy_graphics_buffer_start DIV 256
+        LDA     #graphics_buffer_start DIV 256
         STA     load_from_graphics_buffer + 2
 
         LDX     #$27
 .loop_copy_more_graphics
         LDY     #$07
 .load_from_graphics_buffer
-        ; Screen start - programatically changed
-        ; at run time.
+        ; Buffer start - programatically changed
+        ; at run time from this function.
         ; In memory the address is stored LSB then MSB
         LDA     dummy_screen_start,Y
 .write_to_screen_address
+        ; Screen start - programatically changed
+        ; at run time from this function
         ; In memory the address is stored LSB then MSB
         STA     dummy_screen_start,Y
         DEY
@@ -898,7 +1144,8 @@ mode_5_screen_centre =  $6A10
         LDA     write_to_screen_address + 1
         CLC
 
-        ; Add 8 as we scroll from right to left <-
+        ; We just copied 8 bytes so increment the start
+        ; addres and move to the next 8 bytesbytes
         ADC     #$08
         ; Update the LSB for the start address
         STA     write_to_screen_address + 1
@@ -921,7 +1168,7 @@ mode_5_screen_centre =  $6A10
 ; L104B
         BCS     update_screen_start_address_msb
 
-        ; Overlow of screen so wrap it to the 
+        ; Underflow of screen so wrap it to the 
         ; top of screen memory
         ;
         ; Not sure when this would ever be trigged
@@ -1168,8 +1415,8 @@ right_key_game = read_right_key+1
         ; Detects right key press 6 times in a row
         ; before doing anything - so we don't turn too
         ; fast
-        INC     zp_display_digits
-        LDA     zp_display_digits
+        INC     zp_turn_right_counter
+        LDA     zp_turn_right_counter
 
         ; If the we haven't detected right 6 times
         ; do nothing (branch ahead)            
@@ -1178,7 +1425,7 @@ right_key_game = read_right_key+1
 
         ; Reset the right key detection 
         LDA     #$00
-        STA     zp_display_digits
+        STA     zp_turn_right_counter
 
         ; Maximum value is 16 (assume rotation by 360/16 = 27)
         ; as it's a 4-bit counter. Effectively decrements

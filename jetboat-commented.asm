@@ -5,6 +5,11 @@
 ; 04A0 - 
 ; 0B40 - 
 
+; From basic loader:
+;ENVELOPE 1,  1,70,16,2,2,0,0,126, 0,0,-126,110,110
+;ENVELOPE 2,129, 2, 0,0,0,0,0, 40,-8,0,  -2,126, 45
+;ENVELOPE 3,129, 1,-1,0,0,0,0,  0, 0,0,   0,  0,  0
+
 ; OSWRCH uses VDU values
 
 ; Interesting pokes 
@@ -17,6 +22,7 @@ eventv_msb_vector = $0221
 mode7_start_addr = $7C00
 dummy_screen_start = $8000
 dummy_graphics_buffer_start = $0A00
+mode_5_screen_centre =  $6A10
 
 ;L0B40
 . 
@@ -26,8 +32,36 @@ dummy_graphics_buffer_start = $0A00
         STA     zp_graphics_tiles_storage_lsb
 
         LDX     #$1F
-        JSR     L0B7C
+        JSR     fn_get_xy_tile_graphic_address
 ;...
+
+; L0B6D
+.fn_check_screen_start_address
+        ; When scrolling down,
+        ; if the screen start address is > $8000
+        ; then we need to loop it back to $5800
+        ; which is achieved by subtracting $2800
+        CMP     #$80
+        BCS     reset_screen_to_start
+
+        ; When scrolling up,
+        ; if the screen start address is < $5800
+        ; then we need to loop it back to $8000
+        ; which is achieved by adding $2800
+        CMP     #$58
+        BCC     reset_screen_to_end
+
+        RTS
+
+.reset_screen_to_start
+        ; Subtract $2800 to wrap it around
+        SBC     #$28
+        RTS
+
+.reset_screen_to_end
+        ; Add $2800 to wrap it around
+        ADC     #$28
+        RTS
 
 ; This routine is called with an (x,y) tile coordinates 
 ; stored in zero page.
@@ -61,11 +95,11 @@ dummy_graphics_buffer_start = $0A00
         ; and adds y
         LDA     zp_map_pos_x
         LSR     A
-        STA     zp_map_xy_tile_lookup_addr_msb
+        STA     zp_general_purpose_msb
         LDA     #$00
         ROR     A
         ADC     zp_map_pos_y
-        STA     zp_map_xy_tile_lookup_addr_lsb
+        STA     zp_general_purpose_lsb
 
         ; If carry was set adding to the lsb
         ; branch and increment the MSB
@@ -74,13 +108,13 @@ dummy_graphics_buffer_start = $0A00
 .get_tile_type_and_graphic_address
         ; Effectively add $3000 to the address
         LDA     #$30
-        ADC     zp_map_xy_tile_lookup_addr_msb
-        STA     zp_map_xy_tile_lookup_addr_msb
+        ADC     zp_general_purpose_msb
+        STA     zp_general_purpose_msb
         
         LDY     #$00
         ; Find the tile at this (x,y) co-ordinate
         ; using the table at $3000+
-        LDA     (zp_map_xy_tile_lookup_addr_lsb),Y
+        LDA     (zp_general_purpose_lsb),Y
 
         ; Now we have the tile type
         ; reuse the same zero page locations 
@@ -92,27 +126,29 @@ dummy_graphics_buffer_start = $0A00
         ;    tile graphic address = $2800 + (type * 8)
 
         ; Set MSB to zero from Y
-        STY     zp_map_xy_tile_lookup_addr_msb
-        ; Multiple type by two 
+        STY     zp_general_purpose_msb
+
+        ; Multiple type by eight 
         ASL     A
-        ROL     zp_map_xy_tile_lookup_addr_msb
-        ; Multiple type by two 
+        ROL     zp_general_purpose_msb
         ASL     A
-        ROL     zp_map_xy_tile_lookup_addr_msb
-        ; Multiple type by two 
+        ROL     zp_general_purpose_msb
         ASL     A
-        ROL     zp_map_xy_tile_lookup_addr_msb
+        ROL     zp_general_purpose_msb
+
         ; Store LSB and MSB
-        STA     zp_map_xy_tile_lookup_addr_lsb
-        LDA     zp_map_xy_tile_lookup_addr_msb
+        STA     zp_general_purpose_lsb
+        LDA     zp_general_purpose_msb
+        
         ; Add $2800 to address
         ADC     #$28
-        STA     zp_map_xy_tile_lookup_addr_msb
+        STA     zp_general_purpose_msb
+
         ; Finished
         RTS
 
 .increment_tile_lookup_msb
-        INC     zp_map_xy_tile_lookup_addr_msb
+        INC     zp_general_purpose_msb
         ; Carry can never be set here, this just ends the function
         BCC     get_tile_type_and_graphic_address 
 
@@ -136,7 +172,7 @@ dummy_graphics_buffer_start = $0A00
         ; Load the first map tile (it's 8 bytes)
         ; and store it in the graphic buffer storage
         ; location
-        LDA     (zp_map_xy_tile_lookup_addr_lsb),Y
+        LDA     (zp_general_purpose_lsb),Y
         ; Store the tile in $06xx
         STA     (zp_graphics_tiles_storage_lsb),Y
 
@@ -317,11 +353,11 @@ dummy_graphics_buffer_start = $0A00
         LDA     #$58
         STA     zp_screen_start_msb
 
-        ; Store the vdu loop address in 1B and 1C
-        LDA     #vdu_23_hide_cursor_params DIV 256
-        STA     zp_vdu_23_hide_cursor_params_msb
-        LDA     #vdu_23_hide_cursor_params MOD 256
-        STA     zp_vdu_23_hide_cursor_params_lsb
+        ; Store the vdu parameter block address in 1B and 1C
+        LDA     #mode_5_screen_centre DIV 256
+        STA     zp_screen_target_msb
+        LDA     #mode_5_screen_centre MOD 256
+        STA     zp_screen_target_lsb
 
         ; TODO 
         ; Set these to $FF / 255
@@ -478,13 +514,13 @@ dummy_graphics_buffer_start = $0A00
         ; Check to see if there is any remaining time
         ; left - continure if there is, otherwise branch ahead
         LDA     zp_time_remaining_secs
-        BNE     L0D60
+        BNE     still_game_time_left
 
-        JSR     L16BB
+        JSR     fn_scroll_screen_up
 
         JSR     fn_wait_20_ms
 
-        JSR     L101E
+        JSR     fn_copy_graphics_from_buffer_to_screen
 
         JSR     L122F
 
@@ -509,8 +545,9 @@ dummy_graphics_buffer_start = $0A00
 
         ; OSBYTE &07
         ; Sound command
-        LDX     #first_sound MOD 256
-        LDY     #first_sound DIV 256
+        ; Play the times up sound
+        LDX     #sound_times_up MOD 256
+        LDY     #sound_times_up DIV 256
         LDA     #$07
         JSR     OSWORD
 
@@ -530,10 +567,12 @@ dummy_graphics_buffer_start = $0A00
         JMP     main_game_loop
 ;0D60    
 
-.L0D60
-        ; Show get ready icon?
-        JSR     L128D
+.still_game_time_left
+        ; Check for keyboard or joystick input
+        JSR     fn_check_keys_and_joystick
 
+        ; Play the boat "putt putt" sounds 
+        ; and vary based on speed
         JSR     fn_play_boat_sounds
 
         DEC     zp_scroll_map_steps
@@ -562,7 +601,11 @@ dummy_graphics_buffer_start = $0A00
         BEQ     L0D8E
 
         JMP     L0C57
-;....
+
+;0D8E
+. 
+        JMP     L0D16
+
 ;0D91
 .fn_read_key
         ; OSBYTE &81
@@ -700,13 +743,13 @@ dummy_graphics_buffer_start = $0A00
         ; Hide the cursor 
         ; VDU 23 parameters are read from memory
         LDX     #$00
-.vdu_23_hide_cursor_param_loop
+.loop_vdu_23_hide_cursor_param
         LDA     vdu_23_hide_cursor_params,X
         JSR     OSWRCH
 
         INX
         CPX     #$0A
-        BNE     vdu_23_hide_cursor_param_loop
+        BNE     loop_vdu_23_hide_cursor_param
 
         RTS
 
@@ -840,6 +883,8 @@ dummy_graphics_buffer_start = $0A00
 .loop_copy_more_graphics
         LDY     #$07
 .load_from_graphics_buffer
+        ; Screen start - programatically changed
+        ; at run time.
         ; In memory the address is stored LSB then MSB
         LDA     dummy_screen_start,Y
 .write_to_screen_address
@@ -913,6 +958,113 @@ dummy_graphics_buffer_start = $0A00
 
         RTS        
 ;....
+
+;L122F
+.draw_boat_on_screen
+        ; Reset L0008 to zero       
+        LDA     #$00
+        STA     L0008
+
+        ; Copy the boat graphic source address to our 
+        ; working variables
+        LDA     zp_graphics_source_lsb
+        STA     zp_general_purpose_lsb
+        LDA     zp_graphics_source_msb
+        STA     zp_general_purpose_msb
+
+        ; Copy the target screen address to our working
+        ; variables
+        LDA     zp_screen_target_lsb
+        STA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_screen_target_msb
+        STA     zp_graphics_screen_or_buffer_msb
+
+        ; A boat is made of three graphic "chunks"
+        ; of 8 x 5 bytes so it's 120 bytes per boat
+        CLC
+        LDA     #$03
+        STA     zp_graphics_chunks_remaining
+
+;L1248
+.get_next_graphic_chunk
+        ; Each graphic chunk is 5 x 8 bytes = 40 bytes
+        ; So loop four times around the inner 8 byte loop
+        LDX     #$04
+
+.copy_graphic
+        ; Get this chuck of 8 bytes of the graphic
+        LDY     #$07
+        
+.copy_graphic_8bytes
+        ; Load the graphic from the source buffer
+        ; If it's a black byte then no point in XORing
+        ; it
+        LDA     (zp_general_purpose_lsb),Y
+        BEQ     .black_byte
+
+        ; EOR it onto the screen
+        EOR     (zp_graphics_screen_or_buffer_lsb),Y
+        ; Store the EOR'd graphic
+        STA     (zp_graphics_screen_or_buffer_lsb),Y
+.source_black_byte
+        ; Get the next byte of the graphic to copy
+        DEY
+        BPL     copy_graphic_8bytes
+
+        ; Get the next block of 8 bytes of the source graphic
+        ; By incrementing the LSB by 8
+        CLC
+        LDA     zp_graphics_screen_or_buffer_lsb
+        ADC     #$08
+        STA     zp_graphics_screen_or_buffer_lsb
+        ; Carry is clear then no need to increment the MSB
+        BCC     source_carry_clear
+
+        ; Add the carry to the MSB
+        LDA     zp_graphics_screen_or_buffer_msb
+        ADC     #$00
+        
+        ; If we went beyond $80xx for the screen address
+        ; reset it to the start of the screen ($58xx)
+        JSR     fn_check_screen_start_address
+
+        ; Store the updated MSB and clear the carry flag
+        STA     zp_graphics_screen_or_buffer_msb
+        CLC
+
+.source_carry_clear
+
+        ; Get where we're going to store the next 8 bytes
+        ; (destination) by incrementing the LSB by 8
+        LDA     zp_general_purpose_lsb
+        ADC     #$08
+        STA     zp_general_purpose_lsb
+        BCC     destination_carry_clear
+
+        ; Carry is clear then no need to increment the MSB
+        INC     zp_general_purpose_msb
+        CLC
+
+.destination_carry_clear
+        ; Get the next set of 8 bytes of the tile
+        DEX
+        BPL     copy_graphic
+
+        ; Increment by $18 / 24
+        LDA     zp_graphics_screen_or_buffer_lsb
+        ADC     #$18
+        STA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_graphics_screen_or_buffer_msb
+        ADC     #$01
+        JSR     fn_check_screen_start_address
+
+        CLC
+        STA     zp_graphics_screen_or_buffer_msb
+        DEC     zp_graphics_chunks_remaining
+        BPL     get_next_graphic_chunk
+
+        RTS
+;...
 
 
 
@@ -1098,16 +1250,13 @@ accel_key_game = read_accelerate+1
         RTS
 
 .L1308
-        ; Depending on the value of L0002
-        ; times it by 2 and lookup where
-        ; we have to jump to based on a function
-        ; lookup table - store the function
-        ; value in L0065 and L0066 and jump
-        ; there
-        ;
-        ; L0002 starts at 8 so is 16 to begin with
-        ; L0002 is a four bit value (16 max)
-        ; L is incremented when you turn left
+        ; Use the direction of the boat which
+        ; is stored as 0 - 15, to lookup
+        ; which function we should call
+        ; This is done by doubling the value and using
+        ; it as an offset from the start of the function lookup
+        ; table.  Each function address in the table is 2 bytes 
+        ; in the table hence having to double the direction.
         LDA     zp_boat_direction
         ASL     A
         TAX
@@ -1696,11 +1845,12 @@ accel_key_game = read_accelerate+1
         ; ($FF-$BF = $40 / 64 cs)
         EQUB    $BF,$FF,$FF,$FF,$FF
 
-.first_sound
+.sound_times_up
         ; SOUND 1, 1, 110, 30
         ; Channel 1 (LSB MSB)
         EQUB    $01,$00
         ; Amplitude / loudness (LSB MSB)
+        ; 1 means it uses Envelope 1 otherwise it'd be negative
         EQUB    $01,$00
         ; Pitch (LSB MSB) 
         EQUB    $6E,$00
@@ -1734,12 +1884,12 @@ accel_key_game = read_accelerate+1
 
 ;L16BB
 .fn_scroll_screen_up
-        ; TODO
+        ; TODO MAY NOT BE SCROLL MAY BE PREVIOUS LINE
+        ; CALCULATION
+        ;
         ; Scroll up a row - can only scroll a full row 
-        ; 16 bits / 2 bytes at a time up or down because
-        ; the screen register is start address / 8
-        ; and 8 pixels are are 16 bits because we're in mode 5
-        ; where it's 2 bits per pixel
+        ; 16 pixels / 8 bytes at a time up or down because
+        ; the screen register is start address DIV 8
         ; 
         ; Subtract $140 / 320 from the screen start
         ; address
@@ -1749,7 +1899,7 @@ accel_key_game = read_accelerate+1
         STA     write_to_screen_address + 1
         LDA     zp_screen_start_msb
         SBC     #$01
-        JSR     L0B6D
+        JSR     fn_check_screen_start_address
 
         STA     write_to_screen_address + 2
         RTS
@@ -1911,6 +2061,7 @@ accel_key_game = read_accelerate+1
         ; Completed lap sound
         ; d and p are changed programmatically
         ; SOUND 2, 2, d, p
+        ; second 2 means it uses envelope 2
         EQUB    $02,$00
         EQUB    $02,$00
 
@@ -2152,7 +2303,7 @@ accel_key_game = read_accelerate+1
         CPY     #$13
         BNE     loop_display_high_score_name_n
 
-high_score_name_completed
+.high_score_name_completed
         INX
         ; Have we displayed all the high scores?
         ; If not, loop around agan

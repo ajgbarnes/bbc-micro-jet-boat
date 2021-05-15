@@ -360,9 +360,9 @@ mode_5_screen_centre =  $6A10
 
         ; Set the event handler for interval timer crossing 0 
         ; to be the set timer function
-        LDA     #set_timer_64ms MOD 256
+        LDA     #fn_set_timer_64ms MOD 256
         STA     eventv_lsb_vector
-        LDA     #set_timer_64ms DIV 256
+        LDA     #fn_set_timer_64ms DIV 256
         STA     eventv_msb_vector
 
 ;L0C57
@@ -547,7 +547,7 @@ mode_5_screen_centre =  $6A10
         LDA     #$64
         JSR     fn_wait_for_n_interrupts
 
-        JSR     enable_interval_timer  
+        JSR     fn_enable_interval_timer  
 
         ; What is 14.... 
         INC     zp_time_remaining_secs
@@ -555,7 +555,7 @@ mode_5_screen_centre =  $6A10
         ; Start the timer that changes the on screen
         ; remaining time.
         LDA     #$05
-        JSR     set_timer_64ms   
+        JSR     fn_set_timer_64ms   
         
         JSR     fn_play_boat_sounds
 
@@ -1007,6 +1007,7 @@ L0F04 = L0F03+1
 	; Not going left
         BCC     no_left_or_right_detected
 
+;0F3C
 .fn_check_joystick_right
 	; OSBYTE &80 reads the ADC chip
 	; Reading channel 1 the x axis of the joystick
@@ -1030,7 +1031,134 @@ L0F04 = L0F03+1
         LDY     #$01
         RTS
 
+;0F4D
+.fn_check_joystick_button
+	; OSBYTE &80 reads the ADC chip
+	; Reading channel 0 detects if the joystick
+        ; button has been pressed (ok technically
+        ; this part isn't through the ADC chip as it 
+        ; goes through the System VIA)
+        ; 
+        ; Bits 0 and 1 of X after the call indicate
+        ; if the joystick buttons have been pressed
+        ; (we're only interested in bit 0 as only)
+        ; one joystick is supported
+        LDX     #$00
+        LDA     #$80
+        JSR     OSBYTE
+
+        ; Test to see if joysick one's button has been
+        ; pressed
+        TXA
+        AND     #$01
+        BEQ     no_left_or_right_detected
+        BNE     left_or_right_detected
+
 ;....
+;1014
+.fn_wait_for_n_interrupts
+        ; Wait for n * 20 ms
+        STA     zp_wait_interrupt_count
+.loop_wait_for_interrupt
+        JSR     fn_wait_20_ms
+
+        DEC     zp_wait_interrupt_count
+        BPL     loop_wait_for_interrupt
+
+        RTS
+
+;L101E
+.fn_copy_time_score_lap_to_screen
+        ; Copy the buffered graphics for the remaining time,
+        ; the score and the lap total to the screen
+        ;
+        ; All these graphics are buffered in $0A00 to $0B3F
+        LDA     #graphics_buffer_start MOD 256
+        STA     load_from_graphics_buffer + 1
+        LDA     #graphics_buffer_start DIV 256
+        STA     load_from_graphics_buffer + 2
+
+        LDX     #$27
+.loop_copy_more_graphics
+        LDY     #$07
+.load_from_graphics_buffer
+        ; Buffer start - programatically changed
+        ; at run time from this function.
+        ; In memory the address is stored LSB then MSB
+        LDA     dummy_screen_start,Y
+.write_to_screen_address
+        ; Screen start - programatically changed
+        ; at run time from this function
+        ; In memory the address is stored LSB then MSB
+        STA     dummy_screen_start,Y
+        DEY
+        ; Loop again until we have copied 8 bytes
+        BPL     loop_copy_more_graphics
+
+        ; Get the screen start address LSB
+        LDA     write_to_screen_address + 1
+        CLC
+
+        ; We just copied 8 bytes so increment the start
+        ; addres and move to the next 8 bytesbytes
+        ADC     #$08
+        ; Update the LSB for the start address
+        STA     write_to_screen_address + 1
+        BCC     move_to_next_8 bytes
+
+        ; And the carry to the MSB for the start address
+        LDA     write_to_screen_address + 2
+        ADC     #$00
+
+        ; Check to see if the screen start address
+        ; is greater than the top of screen memory
+        ; which is $8000
+        CMP     #$80
+        BCS     handle_screen_start_overflow
+
+        ; Check to see if the screen start address
+        ; is greater than or equals the bottom of screen 
+        ; memory which is $5800
+        CMP     #$58
+; L104B
+        BCS     update_screen_start_address_msb
+
+        ; Underflow of screen so wrap it to the 
+        ; top of screen memory
+        ;
+        ; Not sure when this would ever be trigged
+        ; unless the start value was wrong entering
+        ; this function
+        ADC     #$28
+        BCC     update_screen_start_address_msb
+
+.handle_screen_start_overflow
+        ; Screen start address was higher than
+        ; top of screen memory, so loop it to the 
+        ; bottom of screen memory ($5800) by subtracting
+        ; $28 from $80 in the MSB of screen start address
+        SBC     #$28
+
+.update_screen_start_address_msb
+        ; Write the new screen start address MSB back to memory
+        STA     write_to_screen_address + 2
+
+.move_to_next_8 bytes
+        ; Move to the next 8 bytes
+        CLC
+        LDA     write_to_screen_address + 1
+        ADC     #$08
+        STA     write_to_screen_address + 1
+        BCC     no_screen_address_carry
+
+        ; There was a carry (LSB > 255) so add
+        ; 1 to the MSB for screen start address
+        INC     write_to_screen_address + 2
+.no_screen_address_carry
+        DEX
+        BPL    loop_copy_more_graphics
+
+        RTS  
 
 ;1068
 .fn_hide_cursor
@@ -1137,6 +1265,7 @@ L0F04 = L0F03+1
         ; white, white, yellow, white
         EQUB    $07,$07,$03,$07
 
+.colour_palette_block
 .palette_logical_colour
         EQUB    $00
 .palette_physical_colour        
@@ -1147,115 +1276,9 @@ L0F04 = L0F03+1
         ; a BBC B
         EQUB    $00,$00,$00
 ;...
-
-;1014
-.fn_wait_for_n_interrupts
-        ; Wait for n * 20 ms
-        STA     zp_wait_interrupt_count
-.loop_wait_for_interrupt
-        JSR     fn_wait_20_ms
-
-        DEC     zp_wait_interrupt_count
-        BPL     loop_wait_for_interrupt
-
-        RTS
-
-;L101E
-.fn_copy_time_score_lap_to_screen
-        ; Copy the buffered graphics for the remaining time,
-        ; the score and the lap total to the screen
-        ;
-        ; All these graphics are buffered in $0A00 to $0B3F
-        LDA     #graphics_buffer_start MOD 256
-        STA     load_from_graphics_buffer + 1
-        LDA     #graphics_buffer_start DIV 256
-        STA     load_from_graphics_buffer + 2
-
-        LDX     #$27
-.loop_copy_more_graphics
-        LDY     #$07
-.load_from_graphics_buffer
-        ; Buffer start - programatically changed
-        ; at run time from this function.
-        ; In memory the address is stored LSB then MSB
-        LDA     dummy_screen_start,Y
-.write_to_screen_address
-        ; Screen start - programatically changed
-        ; at run time from this function
-        ; In memory the address is stored LSB then MSB
-        STA     dummy_screen_start,Y
-        DEY
-        ; Loop again until we have copied 8 bytes
-        BPL     loop_copy_more_graphics
-
-        ; Get the screen start address LSB
-        LDA     write_to_screen_address + 1
-        CLC
-
-        ; We just copied 8 bytes so increment the start
-        ; addres and move to the next 8 bytesbytes
-        ADC     #$08
-        ; Update the LSB for the start address
-        STA     write_to_screen_address + 1
-        BCC     move_to_next_8 bytes
-
-        ; And the carry to the MSB for the start address
-        LDA     write_to_screen_address + 2
-        ADC     #$00
-
-        ; Check to see if the screen start address
-        ; is greater than the top of screen memory
-        ; which is $8000
-        CMP     #$80
-        BCS     handle_screen_start_overflow
-
-        ; Check to see if the screen start address
-        ; is greater than or equals the bottom of screen 
-        ; memory which is $5800
-        CMP     #$58
-; L104B
-        BCS     update_screen_start_address_msb
-
-        ; Underflow of screen so wrap it to the 
-        ; top of screen memory
-        ;
-        ; Not sure when this would ever be trigged
-        ; unless the start value was wrong entering
-        ; this function
-        ADC     #$28
-        BCC     update_screen_start_address_msb
-
-.handle_screen_start_overflow
-        ; Screen start address was higher than
-        ; top of screen memory, so loop it to the 
-        ; bottom of screen memory ($5800) by subtracting
-        ; $28 from $80 in the MSB of screen start address
-        SBC     #$28
-
-.update_screen_start_address_msb
-        ; Write the new screen start address MSB back to memory
-        STA     write_to_screen_address + 2
-
-.move_to_next_8 bytes
-        ; Move to the next 8 bytes
-        CLC
-        LDA     write_to_screen_address + 1
-        ADC     #$08
-        STA     write_to_screen_address + 1
-        BCC     no_screen_address_carry
-
-        ; There was a carry (LSB > 255) so add
-        ; 1 to the MSB for screen start address
-        INC     write_to_screen_address + 2
-.no_screen_address_carry
-        DEX
-        BPL    loop_copy_more_graphics
-
-        RTS        
-;....
-
+       
 ;L122F
-.draw_boat_on_screen
+.fn_draw_boat_on_screen
         ; Reset L0008 to zero       
         LDA     #$00
         STA     L0008
@@ -1359,9 +1382,6 @@ L0F04 = L0F03+1
         BPL     get_next_graphic_chunk
 
         RTS
-;...
-
-
 
 ;L128D
 .fn_check_keys_and_joystick
@@ -1372,11 +1392,11 @@ L0F04 = L0F03+1
 
         ; Check if the S key has been pressed
         ; and turn the sound on if it was
-        JSR     check_s_key
+        JSR     fn_check_sound_keys
 
         ; Check if the F key has been pressed
         ; and freeze the game if it has
-        JSR     check_f_key
+        JSR     fn_check_freeze_continue_keys
 
         ; Disable maskable interrupts
         SEI
@@ -1555,14 +1575,15 @@ accel_key_game = read_accelerate+1
         LDA     zp_boat_direction
         ASL     A
         TAX
-        LDA     boat_direction_fn_lookup,X
+        LDA     lookup_table_boat_direction_fns,X
         STA     zp_addr_fn_boat_direction_lsb
         INX
-        LDA     boat_direction_fn_lookup,X
+        LDA     lookup_table_boat_direction_fns,X
         STA     zp_addr_fn_boat_direction_msb
         JMP     (zp_addr_fn_boat_direction_lsb)
 
-.L131A
+;L131A
+.lookup_table_boat_direction_fns
         ; Function look up table?
         EQUB    fn_boat_direction_0 MOD 256, fn_boat_direction_0 DIV 256
         EQUB    fn_boat_direction_1 MOD 256, fn_boat_direction_1 DIV 256
@@ -1582,7 +1603,6 @@ accel_key_game = read_accelerate+1
         EQUB    fn_boat_direction_15 MOD 256, fn_boat_direction_15 DIV 256
 
 ; 133A
-.boat_direction_fn_lookup
 .fn_boat_direction_0
         ; Boat direction 0 - $133A
         JSR     L13DA
@@ -1665,8 +1685,57 @@ accel_key_game = read_accelerate+1
        
 ;....
 
-;14B9
+;L148D
 .fn_colour_cycle_screen
+        ; When the boat has run aground, colour cycle
+        ; the palette
+
+        ; TODO Reset something to 4...
+        LDA     #$04
+        STA     L0009
+
+        ; OSWORD &07
+        ; Play boat aground sound one
+        ; Parameters are stored at $14E7
+        ; All sounds use Envelope 2 (2nd parameter)        
+        LDX     #sound_boat_aground_first MOD 256
+        LDY     #sound_boat_aground_first DIV 256
+        LDA     #$07
+        JSR     OSWORD
+
+        ; OSWORD &07
+        ; Play sound two
+        ; Parameters are stored at $14EF
+        ; All sounds use Envelope 2 (2nd parameter)   
+        LDX     #sound_boat_aground_second MOD 256
+        LDY     #sound_boat_aground_second DIV 256
+        LDA     #$07
+        JSR     OSWORD
+
+        ; Immediately slow the boat down to the slowest
+        ; speed $0A/10 - 00 is fast
+        LDA     #$0A
+        STA     zp_boat_speed
+
+        ; Set palette logical colour to 3
+        ; So it flashes out of turn by setting this first
+        LDA     #$03
+        STA     palette_logical_colour
+        JSR     fn_scroll_screen_up
+
+        JSR     fn_copy_time_score_lap_to_screen_to_screen
+
+        ; OSBYTE &13 
+        ; Wait for vertical sync (start of the next)
+        ; frame of display.
+        LDA     #$13
+        JSR     OSBYTE
+
+        ; Colour palette cycle index
+        LDX     #$00
+
+;14B9
+.loop_colour_cycle_screen
         ; Cycle through the physical colours
         ; to make the screen flash when the boat is
         ; on land
@@ -1711,20 +1780,34 @@ accel_key_game = read_accelerate+1
         ; all the physical colours in the sequence
         INX
         CPX     #$08
-        BNE     fn_colour_cycle_screen
+        BNE     loop_colour_cycle_screen
 
         ; Default back to the standard game colours
         JSR     fn_set_game_colours
 
         RTS
 
-;...
+.sound_boat_aground_first
+        ; Boat has run aground sound
+        ; SOUND 10, -15, 7, 20
+        ; 10 - flush buffer, play channel 0 sound
+        EQUB    $10,$00,$F1,$FF,$07,$00,$14,$00
+
+.sound_boat_aground_second
+        ; Boat has run aground sound 2
+        ; SOUND 10, 3, 10, 20
+        ; 3  means it uses Envelope 3 
+        ; 11 - flush buffer, play channel 1 sound
+        EQUB    $11,$00,$03,$00,$0A,$00,$14,$00
 
 .palette_colour_cycle
+        ; When a boat runs aground, used to change
+        ; logical colour 3 through cyan, magenta, red
+        ; white, black, cyan, magenta, white
         EQUB    $06,$05,$01,$07,$00,$06,$05,$07
 
 ;L14FF
-.init_graphics_buffers
+.fn_init_graphics_buffers
         ; TODO reference the 0Axx areas with variables
 
         ; Initialise the graphics buffer to $00
@@ -2070,7 +2153,7 @@ accel_key_game = read_accelerate+1
         LDA     #$02
         JMP     fn_calc_digits_for_display
 
-.set_timer_64ms
+.fn_set_timer_64ms
         ; EVENTV Interval Timer - called every 64ms
         ; Accumulator is always set to 5
 
@@ -2129,9 +2212,7 @@ accel_key_game = read_accelerate+1
 .set_timer_64ms_end
         ; Restore the status registers
         PLP
-        RTS             
-
-;...
+        RTS                 
 
 ; 1626
 .var_int_timer_value
@@ -2153,7 +2234,7 @@ accel_key_game = read_accelerate+1
         EQUB    $1E,$00
 
 ; 1633
-.enable_interval_timer
+.fn_enable_interval_timer
         ; Disable interval timer crossing 0 event
         ; timer increments every centisecond
         LDA     #$0E
@@ -2173,7 +2254,7 @@ accel_key_game = read_accelerate+1
 
 ;L16AD
 .lap_times
-        ; TODO Timings per stage or lap
+        ; TODO Timings per stage or lap 
         EQUB    $47,$3D,$33,$2E,$29,$26,$24,$21
         EQUB    $1F,$1C,$1A,$17,$15,$01
 
@@ -2202,7 +2283,7 @@ accel_key_game = read_accelerate+1
 ;16CE
 ; -------------------------------
 ; function - check s / q keys
-.check_s_key
+.fn_check_sound_keys
         ; Check to see if the S key is pressed to turn on sound
         LDX     #$AE
         JSR     fn_read_key
@@ -2217,7 +2298,7 @@ accel_key_game = read_accelerate+1
         LDY     #$00
         JMP     OSBYTE
 
-.check_q_key
+.       check_q_key
         ; Check to see if the Q key is pressed to turn on sound
         LDX     #$EF
         JSR     fn_read_key
@@ -2238,7 +2319,7 @@ accel_key_game = read_accelerate+1
 ; end function - check s / q keys
 ; -------------------------------
 ; function - check f / c keys
-.check_f_key
+.fn_check_freeze_continue_keys
         ; Check to see if the F key has been pressed
         LDX     #$BC
         JSR     fn_read_key
@@ -2272,7 +2353,7 @@ accel_key_game = read_accelerate+1
 
         ; Re-enable interval timer crossing 0 event 
         ; Interval timer increments every centisecond
-        JSR     enable_interval_timer
+        JSR     fn_enable_interval_timer
 
         ; TODO - Give this a variable name
         INC     zp_time_remaining_secs
@@ -2869,13 +2950,14 @@ accel_key_game = read_accelerate+1
         EQUB    $5E,$2C,$FA,$C8,$64,$4B,$32,$19
 
 ;L193F
-high_score_msb
+.high_score_msb
         EQUB    $01,$01,$00,$00,$00,$00,$00,$00
 
 ;1947
 .high_score_name_lsb
         EQUB    $57,$6B,$7F,$93,$A7,$BB,$CF,$E3
 
+;194F
 .high_score_name_msb
         EQUB    $19,$19,$19,$19,$19,$19,$19,$19
 
@@ -2943,7 +3025,7 @@ high_score_msb
 ; 1A2D
 .fn_wait_for_intro_input
         ; Check sounds keys S/Q
-        JSR     check_s_key
+        JSR     fn_check_sound_keys
         
         ; Check if joystick button pressed
         JSR     fn_check_joystick_button
@@ -2962,6 +3044,7 @@ high_score_msb
 .end_fn_wait_for_intro_input
         RTS
 
+; 1A3F
 .fn_show_player_score_below_high_scores
         ; The high score screen in MODE 7 is
         ; already displayed at this point -
@@ -3120,7 +3203,7 @@ high_score_msb
         LDX     #$00
 .loop_read_next_stage_chars
         ; Read next character from memory and write to screen
-        LDA     next_stage_string,X
+        LDA     string_next_stage,X
         JSR     OSWRCH
         ; Increment index counter, check if we have all 68 chars
         ; of the string if not loop again to get next one
@@ -3130,7 +3213,7 @@ high_score_msb
 
         RTS
 
-.next_stage_string
+.string_next_stage
         EQUS    $11,$00,$11,$01,$1F,$02,$10,"Prepare to enter",
         EQUS    $1F,$03,$12,"the next stage",
         EQUS    $1C,$01,$0A,$12,$08,$11,$03,$11,$82,$0C,$0A,$09
@@ -3140,7 +3223,7 @@ high_score_msb
 
 ; TODO
 .L1B47
-        ; Store the lookup table addres in 2B (MSB) and 2C (LSB)
+        ; Store the lookup table address in 2B (MSB) and 2C (LSB)
         ; 
         STX     L002B
         STY     L002C
@@ -3270,7 +3353,6 @@ high_score_msb
 
         RTS
 
-
 ; 1BDB
 .fn_setup_read_lookup_table
         ; There are 11 entries in the lookup
@@ -3287,6 +3369,7 @@ high_score_msb
         TAX
         JMP     L1B47
 
+; Look
 .lookup_table_lsb
         EQUB    $00,$21,$35,$51,$69,$81,$9A,$AE
         EQUB    $C4,$DA,$F1
@@ -3295,18 +3378,15 @@ high_score_msb
         EQUB    $1C,$1C,$1C,$1C,$1C,$1C,$1C,$1C
         EQUB    $1C,$1C,$1C
 
-.high_score
-        EQUS    $94,$9D,$87,"     ",$93,$F0,$F0,$F0,$B0," ",$96,$9A,$A0,$80,$B8,$A1,$F0,"  ",$B8,"                ",$94,$9D,$87,"HIGH ",$93,$FF,$A0," ",$FF,$9A,$96,$B6,$E0,$A6," ",$B6,$AC,$E1,$A6,$E3
-        EQUS    $A1,$99,$93,$FF,"    ",$87,"SCORES ",$94,$9D,$87,"HIGH ",$93,$FF,$F0,$F0,$BF,$9A,$96,$A2,$A1,"  ",$A2,$A1,$A0,$A3,$A1,$99," ",$93,$FF,$AC,$AC,"  ",$87,"SCORES ",$94,$9D,$87,"HIGH "
-        EQUS    $93,$FF,"  ",$FD,"  ",$FE,$A3,$A3,$FD,"  ",$A2,$A3,$A3,$FD,"  ",$FF,$9A,"   ",$87,"SCORES ",$94,$9D,$87,"HIGH ",$93,$FF,"  ",$FF,"  ",$FF,"  ",$FF,"  ",$FE,$A3,$A3,$FF,"  ",$FF,"  ",$FC," "
-        EQUS    $87,"SCORES ",$94,$9D,$87,"     ",$93,$A3,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"         "
+;....
 
-;22D0
+; 1D10
 .high_score_screen
         EQUS    $94,$9D,$87,"     ",$93,$F0,$F0,$F0,$B0," ",$96,$9A,$A0,$80,$B8,$A1,$F0,"  ",$B8,"                ",$94,$9D,$87,"HIGH ",$93,$FF,$A0," ",$FF,$9A,$96,$B6,$E0,$A6," ",$B6,$AC,$E1,$A6,$E3
         EQUS    $A1,$99,$93,$FF,"    ",$87,"SCORES ",$94,$9D,$87,"HIGH ",$93,$FF,$F0,$F0,$BF,$9A,$96,$A2,$A1,"  ",$A2,$A1,$A0,$A3,$A1,$99," ",$93,$FF,$AC,$AC,"  ",$87,"SCORES ",$94,$9D,$87,"HIGH "
         EQUS    $93,$FF,"  ",$FD,"  ",$FE,$A3,$A3,$FD,"  ",$A2,$A3,$A3,$FD,"  ",$FF,$9A,"   ",$87,"SCORES ",$94,$9D,$87,"HIGH ",$93,$FF,"  ",$FF,"  ",$FF,"  ",$FF,"  ",$FE,$A3,$A3,$FF,"  ",$FF,"  ",$FC," "
         EQUS    $87,"SCORES ",$94,$9D,$87,"     ",$93,$A3,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"         "
+; 1E00
 
 ; ----------------------------------------------------------------------------------------
 ; Move Memory One off

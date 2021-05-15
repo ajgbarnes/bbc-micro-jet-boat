@@ -2528,7 +2528,7 @@ accel_key_game = read_accelerate+1
         ; which is held highest in memory so we count down
         ; from 7        
         LDX     #$07
-.L1799
+.check_next_high_score
         ; Subtract the player's score from 
         ; the current high score entry to see if it's
         ; greater than or equal to it
@@ -2538,23 +2538,40 @@ accel_key_game = read_accelerate+1
         LDA     zp_score_msb
         SBC     high_score_msb,X
 
-        ; Score is less than this score 
-        BCC     L17B9
+        ; Current score in high score table is higher
+        ; than the player's score - so we have 
+        ; found the position
+        BCC     high_score_position_found
 
+        ; Player score is either higher than current
+        ; entry or the same (as we did the check above
+        ; on both bytes to see if the current high score
+        ; was overall higher)
         LDA     zp_score_lsb
         CMP     high_score_lsb,X
+        
+        ; Player score LSB is less than high score table
+        ; so branch and use previous high score entry
         BNE     L17B4
 
+        ; Check to see if the player sore MSB is the same
+        ; If so the player score is the same as the current
+        ; high score so they DO get to replace it,
+        ; otherwise use previous entry 
         LDA     zp_score_msb
         CMP     high_score_msb,X
-        BEQ     L17B9
+        BEQ     high_score_position_found
 
 .L17B4
+        ; Check the next (higher) high score in the table
+        ; and see if the player's score is greater than or 
+        ; equal to it
         DEX
+        ; If it goes to $FF/-1 we've checked all the high scores
         CPX     #$FF
-        BNE     L1799
+        BNE     check_next_high_score
 
-.L17B9
+.high_score_position_found
         ; Check to see if the score was below
         ; the lowest score on the high score table
         ; If it is just show the high score table
@@ -2564,15 +2581,14 @@ accel_key_game = read_accelerate+1
         CPX     #$08
         BNE     L17C7
 
-        ; Score was less than lowest score
+        ; Score was less than lowest score so just
+        ; show the table
         JSR     fn_display_high_score_table
-
         JSR     fn_show_player_score_below_high_scores
-
         JMP     fn_display_press_space 
 
 .L17C7
-        STX     L0020
+        STX     zp_high_score_position
         LDA     L194E
         PHA
         LDA     high_score_names
@@ -2593,7 +2609,7 @@ accel_key_game = read_accelerate+1
         STA     L1947,Y
         LDA     L194F,X
         STA     L194F,Y
-        CPX     L0020
+        CPX     zp_high_score_position
         BEQ     L17FA
 
         DEX
@@ -2828,7 +2844,7 @@ accel_key_game = read_accelerate+1
 
 .enter_name_string_complete
         ; Get the new high score index
-        LDX     L0020
+        LDX     zp_high_score_position
 
         ; Look up where the name is in memory
         ; As we're going to overwrite it
@@ -3247,11 +3263,14 @@ accel_key_game = read_accelerate+1
         INY
         LDX     #$00
 
+        ; 1C00 + 2 controls how many times around this loop
+        ; Once, tracked by X
 .load_lookup_table_loop
         ; Get the value at that address + 3 and store it in 33
         ; Read 30 values and store in 0030 - 0060 (why are first three values different)
         LDA     (L002B),Y
         STA     L0033,X
+        ; Y now 4
         INY
         INX
         ; Check to see if X is 30 or greater - if so loop
@@ -3261,17 +3280,26 @@ accel_key_game = read_accelerate+1
         ; 
         LDA     (L002B),Y
         STA     L0032
+        ;Y now 5
         INY
+        ; X set to 0D
         LDX     L0032
 .L1B6F
         LDA     (L002B),Y
+        ; L0038 to L0045 set to (reversed though)
+        ; 32 31 2F 30 33 7F 7E 7D 7F 7E 4A 4B 4A
+        ; LSB of graphic
         STA     L0045,X
+        ; y is now 6
         INY
         DEX
         BPL     L1B6F
 
         LDX     L0032
 .L1B79
+        ; L0046 to L0053 set to (reversed though)
+        ; 4A 4C 4B 4C 4C 4D 4C 17 18 17 15 19 26
+        ; MSB of graphic
         LDA     (L002B),Y
         STA     L0053,X
         INY
@@ -3285,13 +3313,26 @@ accel_key_game = read_accelerate+1
         ; so 70 = $0 or $80 / 128
         LDA     #$00
         STA     zp_graphics_tiles_storage_lsb
+
+; take the value we found in memory, divide it by 2
+; and add $30 / 48 to it and save in 
+; Take bit 1 and roll into 
         LDA     L0053,X
+        ; Divide A by two
         LSR     A
+
+        ; Roll the carry clag in the LSB just to throw away
+        ; the carry (why not use CLC?)
         ROR     zp_graphics_tiles_storage_lsb
         ; add $30 to first buffered value and store in 71 (becomes 55)
+
+        ; Add $30 / 48
         ADC     #$30
-        STA     zp_graphics_tiles_storage_lsb
-        ; Load the 10000000 or 00000000
+
+        ; Store result in LSB throwing away carry above
+        STA     zp_graphics_tiles_storage_msb
+
+
         LDA     zp_graphics_tiles_storage_lsb
         ; Clear carry flag
         CLC
@@ -3303,9 +3344,11 @@ accel_key_game = read_accelerate+1
         ; 71 is now (buffer 2[x] / 2) + 30 = 55
 
         ; add zero to 71 (still 55)
+
+        Tile address = (MSB00) / 2 + $3000 + LSB
         LDA     #$00
-        ADC     zp_graphics_tiles_storage_lsb
-        STA     zp_graphics_tiles_storage_lsb
+        ADC     zp_graphics_tiles_storage_msb
+        STA     zp_graphics_tiles_storage_msb
         LDY     #$00
         TXA
         PHA
@@ -3322,7 +3365,7 @@ accel_key_game = read_accelerate+1
         BIT     L002A
         BPL     L1BB3
 
-        ; if negative set Y to 3
+        ; if negative set A to 3
         LDA     #$03
 .L1BB3
         STA     (zp_graphics_tiles_storage_lsb),Y

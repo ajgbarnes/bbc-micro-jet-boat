@@ -26,15 +26,63 @@ graphics_buffer_start = $0A00
 mode_5_screen_centre =  $6A10
 
 ;L0B40
-.L0B40
+.fn_write_tiles_to_off_screen_buffer
+        ; Define the off screen buffer where we'll
+        ; assemble the right tile graphics, in this
+        ; case at $0900
         LDA     #$00
-        STA     zp_graphics_tiles_storage_lsb
+        STA     zp_graphics_screen_or_buffer_lsb
         LDA     #$09
-        STA     zp_graphics_tiles_storage_lsb
+        STA     zp_graphics_screen_or_buffer_msb
 
+        ; 32 tiles are required
         LDX     #$1F
+
+;L0B4A        
+.loop_get_next_tile
+        ; Get the memory address of the nth tile's
+        ; source graphic
         JSR     fn_get_xy_tile_graphic_address
-;...
+.L0B4D
+        ; Copy all 8 bytes of the graphic
+        LDY     #$07
+
+.loop_next_tile_byte
+        ; to the off screen buffer
+        LDA     (zp_general_purpose_lsb),Y
+        STA     (zp_graphics_screen_or_buffer_lsb),Y
+        DEY
+        ; If there are still some bytes left to copy
+        ; loop around
+        BPL     next_tile_byte
+
+        ; Increment the write address of the off screen
+        ; buffer by 8 bytes 
+        LDA     zp_graphics_screen_or_buffer_lsb
+        CLC
+        ADC     #$08
+        STA     zp_graphics_screen_or_buffer_lsb
+
+        ; Increment the x position in the (x,y)
+        ; coordinates
+        INC     zp_map_pos_x
+        LDA     zp_map_pos_x
+
+        ; The x position can only go up to $50 / 80
+        CMP     #$50
+        BNE     get_next_tile
+
+        ; Reset the x position in the (x,y)
+        ; coordinates to 0 when greater than or equal
+        ; to $50 / 80
+        LDA     #$00
+        STA     zp_map_pos_x
+.get_next_tile
+        ; Do we still have some of the 32 tiles to get?
+        DEX
+        BPL     loop_get_next_tile
+
+        RTS
 
 ; L0B6D
 .fn_check_screen_start_address
@@ -2391,6 +2439,105 @@ accel_key_game = read_accelerate+1
         ; From $6E (110) to $19 (25)
         EQUB    $6E,$6E,$69,$5F,$55,$4B
         EQUB    $41,$37,$2D,$23,$19
+
+.L1797
+        ; Highest 8 scores are stored in memory
+
+        ; Load the scores starting at the lowest first
+        ; which is held highest in memory so we count down
+        ; from 7        
+        LDX     #$07
+.L1799
+        ; Subtract the player's score from 
+        ; the current high score entry to see if it's
+        ; greater than or equal to it
+        SEC
+        LDA     zp_score_lsb
+        SBC     high_score_lsb,X
+        LDA     zp_score_msb
+        SBC     high_score_msb,X
+
+        ; Score is less than this score 
+        BCC     L17B9
+
+        LDA     zp_score_lsb
+        CMP     high_score_lsb,X
+        BNE     L17B4
+
+        LDA     zp_score_msb
+        CMP     high_score_msb,X
+        BEQ     L17B9
+
+.L17B4
+        DEX
+        CPX     #$FF
+        BNE     L1799
+
+.L17B9
+        ; Check to see if the score was below
+        ; the lowest score on the high score table
+        ; If it is just show the high score table
+        ; Otherwise branch ahead to move the scores
+        ; around on the table
+        INX
+        CPX     #$08
+        BNE     L17C7
+
+        ; Score was less than lowest score
+        JSR     fn_display_high_score_table
+
+        JSR     fn_show_player_score_below_high_scores
+
+        JMP     fn_display_press_space 
+
+.L17C7
+        STX     L0020
+        LDA     L194E
+        PHA
+        LDA     high_score_names
+        PHA
+        CPX     #$07
+        BEQ     L17FA
+
+        LDX     #$06
+.L17D7
+        TXA
+        TAY
+        INY
+        LDA     L1937,X
+        STA     L1937,Y
+        LDA     L193F,X
+        STA     L193F,Y
+        LDA     L1947,X
+        STA     L1947,Y
+        LDA     L194F,X
+        STA     L194F,Y
+        CPX     L0020
+        BEQ     L17FA
+
+        DEX
+        JMP     L17D7
+
+.L17FA
+        LDA     zp_score_lsb
+        STA     L1937,X
+        LDA     zp_score_msb
+        STA     L193F,X
+        PLA
+        STA     L194F,X
+        STA     zp_high_score_name_msb
+        PLA
+        STA     L1947,X
+        STA     zp_high_score_name_lsb
+        LDY     #$00
+        LDA     #$0D
+        STA     (zp_high_score_name_lsb),Y
+        JSR     fn_display_high_score_table
+
+        JSR     fn_enter_high_score
+
+        JMP     L19F8            
+
 ; ....
 
 .fn_display_high_score_table
@@ -2476,9 +2623,9 @@ accel_key_game = read_accelerate+1
         JSR     OSWRCH
 
         ; Get the high score value for current high score position
-        LDA     L1937,X
+        LDA     high_score_lsb,X
         STA     zp_number_for_digits_lsb
-        LDA     L193F,X
+        LDA     high_score_msb,X
         STA     zp_number_for_digits_msb
 
         ; Preserve the high score index held in X
@@ -2715,7 +2862,15 @@ accel_key_game = read_accelerate+1
         EQUB    $17,$00,$0A,$72,$00,$00,$00,$00
         EQUB    $00,$00       
 
-;....
+;L1937
+; The 8 high scores stored in LSB and MSB locations
+; Scores are highest to lowest and divided by 10 when stored
+.high_score_lsb
+        EQUB    $5E,$2C,$FA,$C8,$64,$4B,$32,$19
+
+;L193F
+high_score_msb
+        EQUB    $01,$01,$00,$00,$00,$00,$00,$00
 
 ;1947
 .high_score_name_lsb
@@ -2736,28 +2891,141 @@ accel_key_game = read_accelerate+1
         EQUB    $00
 
 ;19F8
+.fn_display_press_space
+        ; Write 40 spaces to the bottom of the Mode 7 screen
+        ; Not sure why this isn't down with OSWRCH like the
+        ; rest
+        LDX     #$00
+        ; Code for space
+        LDA     #$20
+.write_space_to_screen
+        ; Write to the bottom line of the screen        
+        STA     L7FC0,X
+        INX
+        ; Have we written 40 spaces?
+        CPX     #$28
+        ; If not loop back around
+        BNE     write_space_to_screen
 
-;....
+        LDA     #$81
+        STA     L7FC0
+        LDA     #$9D
+        STA     L7FC1
 
-;1A8C
-.string_enter_name
-        ; Teletext control code - Alphanumeric magenta
-        EQUB    $85
-        ; Flash the text
-        EQUB    $88
-        ; String
-        EQUS    "Please enter your name", $0D
+        ; OSBYTE $1F
+        ; In MODE 7 - move text cursor to
+        ; x position - 4, y position - 24
+        LDA     #$1F
+        JSR     OSWRCH
+
+        ; x position
+        LDA     #$04
+        JSR     OSWRCH
+
+        ; y position
+        LDA     #$18
+        JSR     OSWRCH
+
+        LDY     #$00
+;L1A1F
+.get_next_string_press_space_or_fire_byte
+        LDA     string_press_space_or_fire,Y
+        ; Have we reached the string termination character?
+        ; If yes then branch ahead
+        CMP     #$0D
+        BEQ     fn_wait_for_intro_input
+
+        JSR     OSWRCH
+
+        INY
+        JMP     get_next_string_press_space_or_fire_byte
+
+; 1A2D
+.fn_wait_for_intro_input
+        ; Check sounds keys S/Q
+        JSR     check_s_key
         
-        ; Teletext control code - block
-        EQUB    $65
+        ; Check if joystick button pressed
+        JSR     fn_check_joystick_button
 
-;L1AA5
+        ; If the joystick button was pressed, end the wait for input loop
+        BNE     end_fn_wait_for_intro_input
+
+        ; Check to see if space was pressed
+        LDX     #$9D
+        JSR     fn_read_key
+        CPX     #$00
+
+        ; It wasn't so loop again waiting for input
+        BEQ     first_routine
+
+.end_fn_wait_for_intro_input
+        RTS
+
+.fn_show_player_score_below_high_scores
+        ; The high score screen in MODE 7 is
+        ; already displayed at this point -
+        ; this is to add the "You scored" text
+        ; and player's score and "Press space or fire
+        ; to start" on top of the screen
+        ; Mode 7 is 40 cols x 24 rows
+        LDA     #$1F
+        JSR     OSWRCH
+
+        ; Provide the x co-ordinate of 11 on screen
+        LDA     #$0B
+        JSR     OSWRCH
+
+        ; Provide the y co-ordinate of 23 on screen
+        LDA     #$17
+        JSR     OSWRCH
+
+        LDX     #$00
+
+;L1A50
+.get_you_scored_byte
+        ; Get each character of the "You scored" string
+        ; and output to the screen
+        LDA     string_you_scored,X
+        JSR     OSWRCH
+        INX
+        ; Have we read all 11 characters and codes
+        ; if not, loop back around
+        CPX     #$0C
+        BNE     get_you_scored_byte
+
+        ; Get the current score, and output it to
+        ; the screen 
+        LDA     zp_score_lsb
+        STA     zp_number_for_digits_lsb
+        LDA     zp_score_msb
+        STA     zp_number_for_digits_msb
+        LDA     #$04
+        ; Function checks to see if it's mode 7
+        ; and writes the score to the screen
+        JSR     fn_calc_digits_for_display
+
+        ; Write a trailing zero to the screen
+        ; to effectively times it by 10
+        ; and return / end function
+        LDA     #$30
+        JMP     OSWRCH
+
+;L1A6D
+.string_press_space_or_fire
+        EQUS    $87,$88,"Press SPACE or FIRE to start",$0D,$85
+
+;L1A8C
+.string_enter_name
+        ; $85 - alphanumeric magenta colour teletext code
+        ; $88 - flash text teletext code
+        ; $0D - used as string terminator
+        EQUS    $85,$88,"Please enter your name",$0D
+
 .string_you_scored
-        ; Teletext control code - Alphanumeric magenta
-        EQUB    $85
-        EQUS    "You scored"
-        ; Teletext control code - Alphanumeric cyan
-        EQUB    $86
+        ; $85 - alphanumeric magenta colour teletext code
+        ; $86 - alphanumeric cyan colour teletext code
+        EQUS    $85,"You scored",$86
 
 ;1AB1
 .fn_fill_screen_with_jet_boat
@@ -2867,32 +3135,10 @@ accel_key_game = read_accelerate+1
         EQUS    $1F,$03,$12,"the next stage",
         EQUS    $1C,$01,$0A,$12,$08,$11,$03,$11,$82,$0C,$0A,$09
         EQUS    "CONGRATULATIONS!"
-;...
 
-; 1A2D
-.fn_wait_for_intro_input
-        ; Check sounds keys S/Q
-        JSR     check_s_key
-        
-        ; Check if joystick button pressed
-        JSR     fn_check_joystick_button
+;1B46
 
-        ; If the joystick button was pressed, end the wait for input loop
-        BNE     end_fn_wait_for_intro_input
-
-        ; Check to see if space was pressed
-        LDX     #$9D
-        JSR     fn_read_key
-        CPX     #$00
-
-        ; It wasn't so loop again waiting for input
-        BEQ     first_routine
-
-.end_fn_wait_for_intro_input
-        RTS
-
-; ...
-
+; TODO
 .L1B47
         ; Store the lookup table addres in 2B (MSB) and 2C (LSB)
         ; 

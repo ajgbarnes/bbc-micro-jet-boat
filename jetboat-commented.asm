@@ -35,7 +35,7 @@ mode_5_screen_centre =  $6A10
         LDA     #$09
         STA     zp_graphics_screen_or_buffer_msb
 
-        ; 32 tiles are required
+        ; 32 tiles are required (one for each row)
         LDX     #$1F
 
 ;L0B4A        
@@ -820,7 +820,7 @@ mode_5_screen_centre =  $6A10
         EOR     L007A
         BEQ     L0EA1
 
-        JSR     L0EEC    
+        JSR     fn_copy_tile_column_to_screen  
 
 .L0EA1
 
@@ -919,39 +919,40 @@ mode_5_screen_centre =  $6A10
         RTS
 
 ;L0EEC
-.fn_copy_tiles_to_screen
-        ; $0900 is the tile buffer
+.fn_copy_tile_column_to_screen
+        ; $0900 is the tile buffer for columns
+        ; Tiles are assembled here before writing to the 
+        ; screen
         ; Write the load address 
         LDA     #$00
-        STA     copy_graphics_source + 1
+        STA     copy_graphics_column_source + 1
         LDA     #$09
-        STA     copy_graphics_source + 2
+        STA     copy_graphics_column_source + 2
 
         ; There are 32 rows of 8 bytes in Mode 5
         LDX     #$1F
-.loop_copy_graphics_8_bytes
+.loop_copy_graphics_column_8_bytes
         ; Copy the current 8 bytes to the target
         ; screen address
         LDY     #$07
-.loop_copy_graphics_next_byte
-.copy_graphics_source
+.loop_copy_graphics_column_next_byte
+.copy_graphics_column_source
         ; Load the graphics from the source
         LDA     dummy_graphics_load_start,Y
 
-.copy_graphics_target
+.copy_graphics_column_target
         ; Write to the screen destination
         ; and loop back around if all 8 bytes haven't
         ; been copied
         STA     dummy_screen_start,Y
         DEY
-        BPL     copy_graphics_8_bytes
+        BPL     copy_graphics_column_8_bytes
 
 ;L0F03
         ; Load the LSB for the screen write address
         ; as we are going to change the location to 
         ; the next Mode 5 row of 8 bytes by adding $140
-        LDA     copy_graphics_target + 1
-
+        LDA     copy_graphics_column_target + 1
 
         ; Moves the screen write address down a row
         ; Each row is $140 / 320 bytes 
@@ -959,50 +960,50 @@ mode_5_screen_centre =  $6A10
         ; write address
         CLC
         ADC     #$40
-        STA     copy_graphics_target + 1
-        LDA     copy_graphics_target + 2
+        STA     copy_graphics_column_target + 1
+        LDA     copy_graphics_column_target + 2
 
         ; Check to see if the screen start address
         ; is greater than the top of screen memory
         ; which is $8000
         ADC     #$01
         CMP     #$80
-        BCS     handle_screen_write_overflow
+        BCS     handle_column_screen_write_overflow
 
         ; Check to see if the screen start address
         ; is greater than or equals the bottom of screen 
         ; memory which is $5800
         CMP     #$58
-        BCS     store_new_screen_write_address_msb
+        BCS     store_column_new_screen_write_address_msb
         
         ; Underflow of write address so wrap it to the 
         ; top of screen memory
         ADC     #$28
-        BCC     store_new_screen_write_address_msb
+        BCC     store_column_new_screen_write_address_msb
 
 ;L0F1D
-.handle_screen_write_overflow
+.handle_column_screen_write_overflow
         ; Screen write address was higher than
         ; top of screen memory, so loop it to the 
         ; bottom of screen memory ($5800) by subtracting
         ; $28 from $80 in the MSB of screen start address
         SBC     #$28
 
-.store_new_screen_write_address_msb
+.store_column_new_screen_write_address_msb
         ; Store the screen write address MSB
-        STA     copy_graphics_target + 2
+        STA     copy_graphics_column_target + 2
 
         ; We have already copy 8 bytes from the source, so
         ; increment the source address
         CLC
-        LDA     copy_graphics_source+1
+        LDA     copy_graphics_column_source+1
         ADC     #$08
-        STA     copy_graphics_source+1
-        DEX
+        STA     copy_graphics_column_source+1
 
         ; Are there more graphics to copy?
         ; loop back around if so
-        BPL     loop_copy_graphics_8_bytes
+        DEX
+        BPL     loop_copy_graphics_column_8_bytes
 
         RTS
 
@@ -1071,6 +1072,108 @@ mode_5_screen_centre =  $6A10
         BNE     left_or_right_detected
 
 ;....
+
+
+loop_copy_graphics_row_8_bytes = $0FD6
+loop_copy_graphics_row_next_byte = $0FD8
+copy_graphics_row_source = $0FD8
+copy_graphics_row_target = $0FDB
+store_new_row_screen_write_address_msb = $0F1F
+
+;L0FC9
+.fn_copy_tile_row_to_screen
+        ; $0600 is the map tile off screen buffer for rows
+        ; Tiles are assembled here before writing to the 
+        ; screen
+        ; Write the load address 
+        LDA     #$00
+        STA     copy_graphics_row_source + 1
+        LDA     #$06
+        STA     copy_graphics_row_source + 2
+
+        ; There are 40 columns of 8 bytes across the screen
+        ; $27 / 39 but 40 including 0
+        CLC
+        LDX     #$27
+
+.loop_copy_graphics_row_8_bytes
+        ; Copy the current 8 tile bytes to the screen
+        LDY     #$07
+.loop_copy_graphics_row_next_byte
+.copy_graphics_row_source
+        LDA     dummy_screen_start,Y
+
+.copy_graphics_row_target
+        ; Write to the screen destination
+        ; and loop back around if all 8 bytes haven't
+        ; been copied
+        STA     dummy_screen_start,Y
+        DEY
+        BPL     loop_copy_graphics_row_next_byte
+
+        ; Load the LSB for the screen write address
+        ; as we are going to change the location to 
+        ; the next Mode 5 column of 8 bytes by adding $8
+        LDA     copy_graphics_row_target + 1
+        ADC     #$08
+        STA     copy_graphics_row_target + 1
+
+        ; Check to see if a carry happened (number > 255)
+        BCC     increment_row_source
+
+        ; Add the carry to the MSB
+        LDA     copy_graphics_row_target + 2
+        ADC     #$00
+
+        ; Check to see if the screen start address
+        ; is greater than the top of screen memory
+        ; which is $8000
+        CMP     #$80
+        BCS     handle_row_screen_write_overflow
+
+        ; Check to see if the screen start address
+        ; is greater than or equals the bottom of screen 
+        ; memory which is $5800
+        CMP     #$58
+        BCS     store_row_new_screen_write_address_msb
+
+        ; Underflow of write address so wrap it to the 
+        ; top of screen memory
+        ADC     #$28
+        BCC     store_row_new_screen_write_address_msb
+
+.handle_row_screen_write_overflow
+        ; Screen write address was higher than
+        ; top of screen memory, so loop it to the 
+        ; bottom of screen memory ($5800) by subtracting
+        ; $28 from $80 in the MSB of screen start address
+        SBC     #$28
+
+.store_row_new_screen_write_address_msb
+        ; Store the screen write address MSB
+        STA     copy_graphics_row_target + 2
+        CLC
+
+.increment_row_source
+        ; We have already copy 8 bytes from the source, so
+        ; increment the source address, and add the 1 to the MSB
+        ; if there is a carry
+        LDA     copy_graphics_row_source + 1
+        ADC     #$08
+        STA     copy_graphics_row_source + 1
+        BCC     row_8_bytes_copied_to_screen
+
+        INC     copy_graphics_row_source + 2
+        CLC
+
+.row_8_bytes_copied_to_screen
+        ; Are there more graphics to copy?
+        ; loop back around if so
+        DEX
+        BPL     loop_copy_graphics_row_8_bytes
+
+        RTS
+
 ;1014
 .fn_wait_for_n_interrupts
         ; Wait for n * 20 ms

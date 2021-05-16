@@ -403,10 +403,10 @@ mode_5_screen_centre =  $6A10
         STA     zp_screen_start_msb
 
         ; Store the vdu parameter block address in 1B and 1C
-        LDA     #mode_5_screen_centre DIV 256
-        STA     zp_screen_target_msb
         LDA     #mode_5_screen_centre MOD 256
         STA     zp_screen_target_lsb
+        LDA     #mode_5_screen_centre DIV 256
+        STA     zp_screen_target_msb
 
         ; TODO 
         ; Set these to $FF / 255
@@ -738,14 +738,14 @@ mode_5_screen_centre =  $6A10
         CLC
         LDA     zp_screen_start_lsb
         ADC     #$40
-        STA     L0EFE
+        STA     copy_graphics_target + 1
         LDA     zp_screen_start_msb
         ADC     #$01
         ; Check the start address gone beyond $8000
         ; and correct it if it did - only important
         ; for the MSB not the LSB
         JSR     fn_check_screen_start_address
-        STA     L0EFF
+        STA     copy_graphics_target + 2
 
         ; Move the screen left by 4 pixels / one byte
         ; and update our screen address tracking variables
@@ -786,14 +786,14 @@ mode_5_screen_centre =  $6A10
         SEC
         SBC     #$08
         STA     zp_screen_start_lsb
-        STA     L0EFE
+        STA     copy_graphics_target + 1
         LDA     zp_screen_start_msb
         SBC     #$00
         ; Check the start address gone bel0w $5800
         ; and correct it if it did        
         JSR     fn_check_screen_start_address
         STA     zp_screen_start_msb
-        STA     L0EFF
+        STA     copy_graphics_target + 2
 
         LDA     L0078
         STA     zp_map_pos_x
@@ -918,40 +918,50 @@ mode_5_screen_centre =  $6A10
         STA     SYS_VIA_INT_ENABLE
         RTS
 
-.L0EEC
+;L0EEC
+.fn_copy_tiles_to_screen
         ; $0900 is the tile buffer
         ; Write the load address 
         LDA     #$00
-        STA     L0EFB
+        STA     copy_graphics_source + 1
         LDA     #$09
-        STA     L0EFC
-        LDX     #$1F
-.L0EF8
-        LDY     #$07
-.copy_graphics
-        LDA     dummy_graphics_load_start,Y
-L0EFB = L0EFA+1
-L0EFC = L0EFA+2
-.L0EFD
-        STA     dummy_screen_start,Y
-L0EFE = L0EFD+1
-L0EFF = L0EFD+2
-        DEY
-        BPL     L0EFA
+        STA     copy_graphics_source + 2
 
-.L0F03
-        LDA     L0EFE
-L0F04 = L0F03+1
+        ; There are 32 rows of 8 bytes in Mode 5
+        LDX     #$1F
+.loop_copy_graphics_8_bytes
+        ; Copy the current 8 bytes to the target
+        ; screen address
+        LDY     #$07
+.loop_copy_graphics_next_byte
+.copy_graphics_source
+        ; Load the graphics from the source
+        LDA     dummy_graphics_load_start,Y
+
+.copy_graphics_target
+        ; Write to the screen destination
+        ; and loop back around if all 8 bytes haven't
+        ; been copied
+        STA     dummy_screen_start,Y
+        DEY
+        BPL     copy_graphics_8_bytes
+
+;L0F03
+        ; Load the LSB for the screen write address
+        ; as we are going to change the location to 
+        ; the next Mode 5 row of 8 bytes by adding $140
+        LDA     copy_graphics_target + 1
+
 
         ; Moves the screen write address down a row
-        ; Each row is $0140 / 320 bytes 
+        ; Each row is $140 / 320 bytes 
         ; So we add this to the current
         ; write address
         CLC
         ADC     #$40
-        STA     L0EFE
-        LDA     L0EFF
-.L0F0F
+        STA     copy_graphics_target + 1
+        LDA     copy_graphics_target + 2
+
         ; Check to see if the screen start address
         ; is greater than the top of screen memory
         ; which is $8000
@@ -963,12 +973,12 @@ L0F04 = L0F03+1
         ; is greater than or equals the bottom of screen 
         ; memory which is $5800
         CMP     #$58
-        BCS     L0F1F
+        BCS     store_new_screen_write_address_msb
         
         ; Underflow of write address so wrap it to the 
         ; top of screen memory
         ADC     #$28
-        BCC     L0F1F
+        BCC     store_new_screen_write_address_msb
 
 ;L0F1D
 .handle_screen_write_overflow
@@ -978,15 +988,21 @@ L0F04 = L0F03+1
         ; $28 from $80 in the MSB of screen start address
         SBC     #$28
 
-.L0F1F
-        STA     L0EFF
+.store_new_screen_write_address_msb
+        ; Store the screen write address MSB
+        STA     copy_graphics_target + 2
+
+        ; We have already copy 8 bytes from the source, so
+        ; increment the source address
         CLC
-        LDA     L0EFB
+        LDA     copy_graphics_source+1
         ADC     #$08
-        STA     L0EFB
+        STA     copy_graphics_source+1
         DEX
-.L0F2C
-        BPL     L0EF8
+
+        ; Are there more graphics to copy?
+        ; loop back around if so
+        BPL     loop_copy_graphics_8_bytes
 
         RTS
 
@@ -1276,7 +1292,181 @@ L0F04 = L0F03+1
         ; a BBC B
         EQUB    $00,$00,$00
 ;...
-       
+
+.fn_toggle_get_ready_icon
+        LDA     #$00
+        STA     L0008
+
+        ; Get the source buffer for the get ready
+        ; icon (where it's already been cached)
+        ; and use that as the copy from source
+        LDA     zp_graphics_source_lsb
+        STA     source_get_ready_graphic_buffer + 1
+        LDA     zp_graphics_source_msb
+        STA     source_get_ready_graphic_buffer + 2
+
+        ; Get the target screen address for the get ready
+        ; icon and use that as the copy to target
+        LDA     zp_screen_target_lsb
+        STA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_screen_target_msb
+        STA     zp_graphics_screen_or_buffer_msb
+
+        ; Clock is made of 3 chunks
+        CLC
+        LDA     #$03
+        STA     zp_graphics_chunks_remaining
+
+.get_get_ready_next_chunk
+        ; Each chunk is 5 x 8 bytes
+        ; (Loops on positive and zero is positive)
+        LDX     #$04
+.get_get_ready_next_8_bytes
+        LDY     #$07
+.source_get_ready_graphic_buffer
+.loop_copy_get_ready_byte
+        ; Load the next byte
+        LDA     dummy_screen_start,Y
+
+        ; If it's just transparent then skip
+        ; as EORing it on the screen will have no effect
+        BEQ     get_next_get_ready_byte
+
+        ; Cache the graphic byte on the stack
+        PHA
+
+        ; If the current graphic on screen is 
+        ; transparent then skip ahead and replace it
+        ; with the source graphic byte (no point EORing it
+        ; as it'll have no effect)
+        LDA     (zp_graphics_screen_or_buffer_lsb),Y
+        BEQ     write_get_ready_byte_to_screen
+
+        ; Cache the source graphic address
+        LDA     source_get_ready_graphic_buffer + 1
+        STA     zp_general_purpose_lsb
+        LDA     source_get_ready_graphic_buffer + 2
+        STA     zp_general_purpose_msb
+
+        ; EOR the graphic with what's currently on the
+        ; screen and stick it back on the stack
+        PLA
+        EOR     (zp_graphics_screen_or_buffer_lsb),Y
+        PHA
+
+        ; If the graphic that is going to be written to
+        ; the screen is the same as the source graphic
+        ; after it's been EOR'd then branch ahead
+        ; and check if it's the same as what's already
+        ; on screen
+        AND     (zp_general_purpose_lsb),Y
+        CMP     (zp_general_purpose_lsb),Y
+        BEQ     check_same_as_target
+
+        ; TODO Don't know what L0008 is...
+        ; Set some flag... 
+        ; And always branch (as it's always negative)
+        ; Different graphic?
+        LDA     #$FF
+        STA     L0008
+        BMI     write_get_ready_byte_to_screen
+
+;L113F
+.check_same_as_target
+        ; Load the graphic byte and preserve it back
+        ; on the stack too
+        PLA
+        PHA
+
+        ; Is the graphic the same as what's on the screen
+        ; already? If so, branch ahead to write it...
+        AND     (zp_graphics_screen_or_buffer_lsb),Y
+        CMP     (zp_graphics_screen_or_buffer_lsb),Y
+        BEQ     write_get_ready_byte_to_screen
+
+        ; TODO different graphic?
+        LDA     #$FF
+        STA     L0008
+
+;L114B
+.write_get_ready_byte_to_screen
+        ; Write the graphic to the screen
+        PLA
+        STA     (zp_graphics_screen_or_buffer_lsb),Y
+
+.get_next_get_ready_byte
+        ; Copy the next bye of the current chunk
+        DEY
+        BPL     loop_copy_get_ready_byte
+
+        ; Increment the screen target destination
+        ; as 8 bytes were just written
+        CLC
+        LDA     zp_graphics_screen_or_buffer_lsb
+        ADC     #$08
+        STA     zp_graphics_screen_or_buffer_lsb
+        ; If the carry wasn't set, no need to 
+        ; do the carry add to the MSB as the carry will be
+        ; clear
+        BCC     increment_get_ready_buffer
+
+        ; Add the carry to the screen target address MSB
+        LDA     zp_graphics_screen_or_buffer_msb
+        ADC     #$00
+
+        ; Check it didn't go beyond $7FFF, if so
+        ; wrap it around
+        JSR     fn_check_screen_start_address
+
+        ; Update the screen target address MSB
+        STA     zp_graphics_screen_or_buffer_msb
+
+        CLC
+.increment_get_ready_buffer
+        ; Get the source buffer address and increment by
+        ; 8 bytes as the current 8 bytes have just
+        ; been processed - so add 8 to the LSB and 
+        ; write it back 
+        LDA     source_get_ready_graphic_buffer + 1
+        ADC     #$08
+        STA     source_get_ready_graphic_buffer +1
+
+        ; If carry was clear we don't have to increment
+        ; the MSB
+        BCC     check_get_ready_chunk_complete
+
+        ; Increment the MSB too
+        INC     source_get_ready_graphic_buffer + 2
+        CLC
+.check_get_ready_chunk_complete
+        ; Get the next 8 bytes for this chunk
+        DEX
+        BPL     get_get_ready_next_8_bytes
+
+        ; Calculate the next row address for Mode 5
+        ; From the start byte it would be $140 to add
+        ; but we just wrote 5 bytes so to get to the 
+        ; next row start position use $118
+        ; ($140 - ($5 x $8)) = $118
+        LDA     zp_graphics_screen_or_buffer_lsb
+        ADC     #$18
+        STA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_graphics_screen_or_buffer_msb
+        ADC     #$01
+
+        ; Check it didn't go over $7FFF, if so wrap it 
+        ; around
+        JSR     fn_check_screen_start_address
+
+        CLC
+        ; Store the address
+        STA     zp_graphics_screen_or_buffer_msb
+        DEC     zp_graphics_chunks_remaining
+        BPL     get_get_ready_next_chunk
+
+        RTS
+;117F
+;...  
 ;L122F
 .fn_draw_boat_on_screen
         ; Reset L0008 to zero       

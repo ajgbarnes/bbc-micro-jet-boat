@@ -2521,7 +2521,8 @@ accel_key_game = read_accelerate+1
         EQUB    $6E,$6E,$69,$5F,$55,$4B
         EQUB    $41,$37,$2D,$23,$19
 
-.L1797
+; L1797
+.fn_did_score_make_high_score_table
         ; Highest 8 scores are stored in memory
 
         ; Load the scores starting at the lowest first
@@ -2552,7 +2553,7 @@ accel_key_game = read_accelerate+1
         
         ; Player score LSB is less than high score table
         ; so branch and use previous high score entry
-        BNE     L17B4
+        BNE     player_score_greater_than_current_score
 
         ; Check to see if the player sore MSB is the same
         ; If so the player score is the same as the current
@@ -2562,7 +2563,8 @@ accel_key_game = read_accelerate+1
         CMP     high_score_msb,X
         BEQ     high_score_position_found
 
-.L17B4
+;L17B4
+.player_score_greater_than_current_score
         ; Check the next (higher) high score in the table
         ; and see if the player's score is greater than or 
         ; equal to it
@@ -2579,7 +2581,7 @@ accel_key_game = read_accelerate+1
         ; around on the table
         INX
         CPX     #$08
-        BNE     L17C7
+        BNE     player_score_made_table
 
         ; Score was less than lowest score so just
         ; show the table
@@ -2587,56 +2589,94 @@ accel_key_game = read_accelerate+1
         JSR     fn_show_player_score_below_high_scores
         JMP     fn_display_press_space 
 
-.L17C7
+.player_score_made_table
+        ; Store the high score position
         STX     zp_high_score_position
-        LDA     L194E
+
+        ; Load the highest score in the high score table
+        ; Note - scores are stored low to high but
+        ; high score in memory is high to low... 
+        ; And store on the stack
+        LDA     high_score_name_lsb + 7
         PHA
         LDA     high_score_names
         PHA
+
+        ; If the player score goes into the bottom of the table
+        ; we don't need to move any scores down
         CPX     #$07
-        BEQ     L17FA
+        BEQ     high_scores_demoted
 
         LDX     #$06
-.L17D7
+.demote_high_scores
+        ; Move all the scores in the positions 
+        ; at and below the player's score position 
+        ; down one place
         TXA
         TAY
         INY
-        LDA     L1937,X
-        STA     L1937,Y
-        LDA     L193F,X
-        STA     L193F,Y
-        LDA     L1947,X
-        STA     L1947,Y
-        LDA     L194F,X
-        STA     L194F,Y
+        ; Move the LSBs of the high scores down
+        LDA     high_score_lsb,X
+        STA     high_score_lsb,Y
+        ; Move the MSBs of the high scores down
+        LDA     high_score_msb,X
+        STA     high_score_msb,Y
+
+        ; Move the LSBs of the high score name pointer down one
+        LDA     high_score_name_lsb,X
+        STA     high_score_name_lsb,Y
+        
+        ; Move the MSBs of the high score name pointer down one        
+        LDA     high_score_name_msb,X
+        STA     high_score_name_msb,Y
+
+        ; If we have reached the high score index
+        ; where the player's score will go we've finished
+        ; the demotions
         CPX     zp_high_score_position
-        BEQ     L17FA
+        BEQ     demote_high_scores
 
+        ; Move to the next high score in the table
         DEX
-        JMP     L17D7
+        JMP     demote_high_scores
 
-.L17FA
+.high_scores_demoted
+        ; Write the player's score into the 
+        ; write part of the high score array
         LDA     zp_score_lsb
-        STA     L1937,X
+        STA     high_score_lsb,X
         LDA     zp_score_msb
-        STA     L193F,X
+        STA     high_score_msb,X
+
+        ; Player name is always stored as the last name
+        ; and indexed to the right position in the 
+        ; high_score_name_lsb/msb arrays
         PLA
-        STA     L194F,X
+        STA     high_score_name_msb,X
         STA     zp_high_score_name_msb
         PLA
-        STA     L1947,X
+        STA     high_score_name_lsb,X
         STA     zp_high_score_name_lsb
+
+
+        ; Empty the player's name string as they haven't
+        ; entered it yet (so display it as empty)
         LDY     #$00
         LDA     #$0D
         STA     (zp_high_score_name_lsb),Y
+
+        ; Display the high score table
         JSR     fn_display_high_score_table
 
+        ; Overlay the enter high score on the
+        ; right position and get the player to enter 
+        ; their name
         JSR     fn_enter_high_score
 
-        JMP     L19F8            
+        ; Overlay the press space or fire to start
+        JMP     fn_display_press_space            
 
-; ....
-
+; 181F
 .fn_display_high_score_table
         ; Switch to MODE 7
         LDA     #$16

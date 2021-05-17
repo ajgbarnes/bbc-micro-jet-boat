@@ -344,12 +344,12 @@ mode_5_screen_centre =  $6A10
         STA     L0009
         STA     zp_current_lap
         STA     zp_current_stage
-        STA     L0063
+        STA     zp_laps_for_current_stage
         STA     zp_stage_completed_status
 
         ; Look up the current lap time for completion
         LDX     zp_current_lap
-        LDA     lap_times,X
+        LDA     stage_lap_times,X
         STA     zp_time_remaining_secs
         DEC     zp_time_remaining_secs
 
@@ -2642,22 +2642,27 @@ accel_key_game = read_accelerate+1
         JSR     fn_add_time_to_score_and_display
         CLI
 
-
-        LDX     L0063
+        ; Load the additional hazards for this lap in this
+        ; stage - they get progressively harder per stage lap
+        ; There are 13 levels of difficulty per stage 
+        ; where additional objects are added to the map
+        LDX     zp_laps_for_current_stage
         JSR     fn_setup_read_lookup_table
 
-        ; Increase the current lap
+        ; Increase the total laps and
+        ; laps for the current stage
         INC     zp_current_lap
-        INC     L0063
+        INC     zp_laps_for_current_stage
 
-        ; If 0C laps  have been completed?
-        LDA     L0063
+        ; Check to see if we've reached the 13th lap
+        ; if so we've completed the stage
+        LDA     zp_laps_for_current_stage
         CMP     #$0C
-        BNE     L167F
+        BNE     skip_stage_increment
 
         ; Reset the stage number of laps
         LDA     #$00
-        STA     L0063
+        STA     zp_laps_for_current_stage
 
         ; Set the stage completed status
         LDA     #$FF
@@ -2665,11 +2670,14 @@ accel_key_game = read_accelerate+1
 
         ; Move to the next stage
         INC     zp_current_stage
-.L167F
-        ; Get the new lap time for the new stage
-        ; (they always reduce so it's harder)
+
+.skip_stage_increment
+        ; Get the new lap time for the current stage
+        ; (they always reduce on new stages so it's harder)
+        ; but the lap time stays constant for all laps
+        ; in a stage
         LDX     zp_current_stage
-        LDA     lap_times,X
+        LDA     stage_lap_times,X
         STA     zp_time_remaining_secs
         
         ; Set up the timer
@@ -2722,11 +2730,13 @@ accel_key_game = read_accelerate+1
         LDA     #$FF
         STA     zp_checkpoint_status
         RTS        
-;....
 
 ;L16AD
-.lap_times
-        ; TODO Timings per stage or lap 
+.stage_lap_times
+        ; Timings per lap for each stage - each 
+        ; stage reduces the lap times but the lap
+        ; time stays constant for all laps in a stage
+        ; (until it becomes impossible)
         EQUB    $47,$3D,$33,$2E,$29,$26,$24,$21
         EQUB    $1F,$1C,$1A,$17,$15,$01
 
@@ -3809,7 +3819,7 @@ accel_key_game = read_accelerate+1
 
         LDX     L0032
 .L1B79
-        ; L0046 to L0053 set to (reversed though)
+        ; L0046 to L0053 set to
         ; 4A 4C 4B 4C 4C 4D 4C 17 18 17 15 19 26
         ; MSB of graphic
         LDA     (L002B),Y
@@ -3857,7 +3867,7 @@ accel_key_game = read_accelerate+1
 
         ; add zero to 71 (still 55)
 
-        Tile address = (MSB00) / 2 + $3000 + LSB
+        ;Tile address = (MSB00) / 2 + $3000 + LSB
         LDA     #$00
         ADC     zp_graphics_tiles_storage_msb
         STA     zp_graphics_tiles_storage_msb
@@ -3910,9 +3920,10 @@ accel_key_game = read_accelerate+1
 
 ; 1BDB
 .fn_setup_read_lookup_table
-        ; There are 11 entries in the lookup
-        ; table - when entering X = 0 so it'll
-        ; loop across the lookup table addresses
+        ; There are 12 entries in the lookup
+        ; table - this is used to find the obstacles
+        ; per lap in a stage - in each stage there
+        ; are more per lap
         CPX     #$0B
         BCC     fn_read_lookup_table
 

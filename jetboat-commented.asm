@@ -343,7 +343,7 @@ mode_5_screen_centre =  $6A10
         STA     L001F
         STA     L0009
         STA     zp_current_lap
-        STA     L0062
+        STA     zp_current_stage
         STA     L0063
         STA     zp_stage_completed_status
 
@@ -386,6 +386,14 @@ mode_5_screen_centre =  $6A10
         STA     zp_boat_direction
 
         ; MSB / LSB address? 0B75
+        ; Or start X / Y coordinate.
+        ; Starts at $75, as screen scrolls on increments by one
+        ; Gets reset to zero at $80
+        ; Boat starts:
+        ;        x $1D y $0C
+        ; Triggers checkpoint at y 0E x 58 - 66
+        ; 78 is Y
+        
         LDA     #$75
         STA     L0077
         STA     L0074
@@ -490,10 +498,10 @@ mode_5_screen_centre =  $6A10
         LDA     #$64
         JSR     fn_wait_for_n_interrupts
 
-        ; TODO Dunno more variables
-        ; 255
+        ; Set this so that the score won't be updated
+        ; when the pre-game scrolling happens
         LDA     #$FF
-        STA     L0023
+        STA     zp_pre_game_scrolling_status
 
         ; Map will be scrolled onto the screen 
         ; using 40 steps (including 0) - this is because
@@ -527,16 +535,21 @@ mode_5_screen_centre =  $6A10
         DEC     zp_scroll_map_steps
         BPL     loop_scroll_map_start
 
-        ; NOW START THE GAME?  NEEDS CLOCK FIRST
-        ; TODO DUNNO Reset some variables
+        ; Set the indicator that pre-game scrolling
+        ; has completed and updates to the score can now 
+        ; happen
         LDA     #$00
-        STA     L0023
+        STA     zp_pre_game_scrolling_status
+
         LDA     #$00
         STA     L000F
+
+        ; Set the graphics source to the Get Ready Graphic
+        ; (it's stored at 04A0)
         LDA     #$A0
-        STA     L0026
+        STA     zp_graphics_source_lsb
         LDA     #$04
-        STA     L0027
+        STA     zp_graphics_source_msb
 
         ; Show the Get Ready icon
         JSR     fn_toggle_get_ready_icon
@@ -842,7 +855,7 @@ mode_5_screen_centre =  $6A10
         CLI
         JSR     L10D6
 
-        JSR     L1645
+        JSR     fn_check_checkpoint_or_lap_complete
 
         RTS             
 
@@ -1072,13 +1085,6 @@ mode_5_screen_centre =  $6A10
         BNE     left_or_right_detected
 
 ;....
-
-
-loop_copy_graphics_row_8_bytes = $0FD6
-loop_copy_graphics_row_next_byte = $0FD8
-copy_graphics_row_source = $0FD8
-copy_graphics_row_target = $0FDB
-store_new_row_screen_write_address_msb = $0F1F
 
 ;L0FC9
 .fn_copy_tile_row_to_screen
@@ -1311,11 +1317,12 @@ store_new_row_screen_write_address_msb = $0F1F
         EQUB    $00,$00
 
 .fn_set_game_colours
-        ; Load value from 62 and keep the bottom two bits
+        ; Use the current stage to change the palettle
+        ; Load value and keep the bottom two bits
         ; Pulls a column of colours from the banks
         ; X is used a the counter into which colour
-        ; scheme will be used - there are 3 to choose from
-        LDA     L0062
+        ; scheme will be used - there are 4 to choose from
+        LDA     zp_current_stage
         AND     #$03
         TAX
 
@@ -1326,7 +1333,7 @@ store_new_row_screen_write_address_msb = $0F1F
         STA     palette_logical_colour
 
 
-        ; Not sure what it calls this here
+        ; Change logical colour 0
         JSR     fn_change_colour_palette
 
         ; Set the next 3 colours
@@ -1394,7 +1401,51 @@ store_new_row_screen_write_address_msb = $0F1F
         ; for future use and don't do anything on 
         ; a BBC B
         EQUB    $00,$00,$00
-;...
+
+;10D5
+.update_score_return
+        RTS
+
+;10D6
+.fn_update_score
+        ; If it's the pre-game scrolling then
+        ; don't update the score
+        BIT     zp_pre_game_scrolling_status
+        ; Branch if negative (set to negative
+        ; during pre-game scrolling)
+        BMI     update_score_return
+
+        INC     L0019
+        LDA     L0019
+        CMP     #$10
+        BNE     update_score_return
+
+        ; Reset 19 to 0
+        LDA     #$00
+        STA     L0019
+
+        ; Check to see if 1A is $14 / 20
+        ; If so don't update the score
+        LDA     L001A
+        CMP     #$14
+        BEQ     update_score_return
+
+        INC     L001A
+
+        ; Add $01 to the current score LSB
+        CLC
+        LDA     zp_score_lsb
+        ADC     #$01
+        STA     zp_score_lsb
+        ; Check if the carry is set - if so increment 
+        ; the MSB
+        BCC     redraw_score
+
+        ; Add 1 to the MSB
+        INC     zp_score_msb
+.redraw_score
+        ; Redraw the score on screen
+        JMP     fn_draw_current_score
 
 .fn_toggle_get_ready_icon
         LDA     #$00
@@ -2016,7 +2067,7 @@ accel_key_game = read_accelerate+1
         STA     palette_logical_colour
         JSR     fn_scroll_screen_up
 
-        JSR     fn_copy_time_score_lap_to_screen_to_screen
+        JSR     fn_copy_time_score_lap_to_screen
 
         ; OSBYTE &13 
         ; Wait for vertical sync (start of the next)
@@ -2449,6 +2500,8 @@ accel_key_game = read_accelerate+1
 .fn_set_timer_64ms
         ; EVENTV Interval Timer - called every 64ms
         ; Accumulator is always set to 5
+        ;
+        ; Also called independently 
 
         ; Preserve the status registers on the stack
         PHP
@@ -2543,6 +2596,132 @@ accel_key_game = read_accelerate+1
         LDY     #$00
         JMP     OSBYTE
 
+.fn_check_checkpoint_or_lap_complete
+        ; Check to see if the checkpoint mid-map
+        ; has been reached - if not test for it
+        ; Status will be $FF if it's been reached
+        BIT     zp_checkpoint_status
+        BPL     check_if_at_checkpoint 
+
+        ; Boat has completed a lap if the checkpoint
+        ; status is set AND the returns to the start.
+        ; The start is tested for the (x,y) coordinates 
+        ; if the following is true:
+        ;        $18 =< x < $25
+        ;               y = $0C
+
+        ; Check if the boat's y position is at $0C
+        ; if not then return
+        LDA     zp_boat_ypos
+        CMP     #$0C
+        BNE     end_fn_check_checkpoint_or_lap_complete
+
+        ; Check if the boat's x position is greater
+        ; than or equal to $18, it not then return
+        LDA     zp_boat_xpos
+        CMP     #$18
+        BCC     end_fn_check_checkpoint_or_lap_complete
+
+        ; Check if the boat's x position is less
+        ; than to $25, it not then return
+        CMP     #$25
+        BCS     end_fn_check_checkpoint_or_lap_complete
+
+        ; Lap completion now confirmed, reset
+        ; the checkpoint status for the next lap
+        LDA     #$00
+        STA     zp_checkpoint_status
+
+
+        STA     L001A
+        STA     L0019
+
+        ; Stop any maskable interrupts and
+        ; Add the time to the score plus display it
+        SEI
+        JSR     fn_add_time_to_score_and_display
+        CLI
+
+
+        LDX     L0063
+        JSR     fn_setup_read_lookup_table
+
+        ; Increase the current lap
+        INC     zp_current_lap
+        INC     L0063
+
+        ; If 0C laps  have been completed?
+        LDA     L0063
+        CMP     #$0C
+        BNE     L167F
+
+        ; Reset the stage number of laps
+        LDA     #$00
+        STA     L0063
+
+        ; Set the stage completed status
+        LDA     #$FF
+        STA     zp_stage_completed_status
+
+        ; Move to the next stage
+        INC     zp_current_stage
+.L167F
+        ; Get the new lap time for the new stage
+        ; (they always reduce so it's harder)
+        LDX     zp_current_stage
+        LDA     lap_times,X
+        STA     zp_time_remaining_secs
+        
+        ; Set up the timer
+        ; Need to have the accumulator set to 05
+        ; or it'll ignore setup of the timer
+        LDA     #$05
+        JSR     fn_set_timer_64ms
+
+        ; Redraw the lap counter with the new
+        ; reduced lap time
+        JSR     fn_draw_lap_counter
+
+        ; TODO move the screen?
+        JSR     fn_scroll_screen_up
+
+        ; Wait 20 ms 
+        JSR     fn_wait_20_ms
+
+        ; Copy the updated time/score/laps to the screen
+        JSR     fn_copy_time_score_lap_to_screen
+
+.end_fn_check_checkpoint_or_lap_complete
+        RTS
+
+;1698
+.check_if_at_checkpoint 
+        ; Boat is at the checkpoint if for the boat's
+        ; (x,y) coordinates the following is true:
+        ;        $5E =< x < $6E
+        ;               y = $0E
+
+        ; Check if the boat's y position is at $0E
+        ; if not then return
+        LDA     zp_boat_ypos
+        CMP     #$0E
+        BNE     end_fn_check_checkpoint_or_lap_complete
+
+        ; Check if the boat's x position is greater
+        ; than or equal to $5E, it not then return
+        LDA     zp_boat_xpos
+        CMP     #$5E
+        BCC     end_fn_check_checkpoint_or_lap_complete
+
+        ; Check if the boat's x position is less
+        ; than to $6E, it not then return
+        CMP     #$6E
+        BCS     end_fn_check_checkpoint_or_lap_complete
+
+        ; Checkpoint reached - set the status flag
+        LDA     #$FF
+        STA     zp_checkpoint_status
+        RTS        
 ;....
 
 ;L16AD

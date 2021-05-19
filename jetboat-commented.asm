@@ -65,8 +65,8 @@ mode_5_screen_centre =  $6A10
 
         ; Increment the x position in the (x,y)
         ; coordinates
-        INC     zp_map_pos_x
-        LDA     zp_map_pos_x
+        INC     zp_map_pos_y
+        LDA     zp_map_pos_y
 
         ; The x position can only go up to $50 / 80
         CMP     #$50
@@ -76,7 +76,7 @@ mode_5_screen_centre =  $6A10
         ; coordinates to 0 when greater than or equal
         ; to $50 / 80
         LDA     #$00
-        STA     zp_map_pos_x
+        STA     zp_map_pos_y
 .get_next_tile
         ; Do we still have some of the 32 tiles to get?
         DEX
@@ -119,35 +119,36 @@ mode_5_screen_centre =  $6A10
 ; 1. Works out the tile type for the (x,y)
 ; 2. Looks up where the tile graphic data is held in memory;; 
 ;
-; All the tile type data for all (x,y) coordinates is held
+; All the tile ty-pe data for all (x,y) coordinates is held
 ; starting at $3000.  
 ;       0 =< x < 128
-;       0 =< y < 128
+;       0 =< y < 80
 ; 
 ; So 128 tiles across the map
 ; So 128 tiles down the map
 ;
 ; Simple algorithm for (x,y) tile type lookup
 ; 
-;    tile memory address = $3000 + (x * $FF) + y
+;    Tile type memory address = $3000 + ((y * $FF) / 2) + x
 ;
-; More complex below as it's spread across 2 bytes
+; So first x row (y=0)  is stored $3000 to $307F
+; Next x row     (y=1)  is stored $3080 to $30FF
+; ...
+; Last x row     (y=80) is stored $5780 to $57FF
 ;
-; So it does the following:
-; 1. msb = x / 2 (LSR A)
-; 2. lsb = 
-; 3. msb = msb + $30 (effectively adds $3000 to the address)
+; This is then used to look up the tile graphic
+
 
 ;L0B7C
 .fn_get_xy_tile_graphic_address
-        ; Treats x as $x00 and divides by 2
-        ; and adds y
-        LDA     zp_map_pos_x
+        ; Treats y as $x00 and divides by 2
+        ; and adds x
+        LDA     zp_map_pos_y
         LSR     A
         STA     zp_general_purpose_msb
         LDA     #$00
         ROR     A
-        ADC     zp_map_pos_y
+        ADC     zp_map_pos_x
         STA     zp_general_purpose_lsb
 
         ; If carry was set adding to the lsb
@@ -211,7 +212,10 @@ mode_5_screen_centre =  $6A10
         STA     zp_graphics_tiles_storage_lsb
         ; In Mode 5 the screen is $27 / 39
         LDX     #$27
-.L0BB6
+.loop_get_next_tile
+        ; Find the source address for the tile
+        ; Ths is going to be copied into the off
+        ; screen buffer
         JSR     fn_get_xy_tile_graphic_address
 
         ; MODE 5 screen is blocks of 8 bytes per x/y
@@ -241,18 +245,21 @@ mode_5_screen_centre =  $6A10
         ADC     #$00
         STA     zp_graphics_tiles_storage_lsb
 
-        ; Loop until we have loaded all the map tiles
-        ; up to FF
-        INC     zp_map_pos_y
-        BIT     zp_map_pos_y
-        BPL     L0BD9
+        ; y axis only goes to 128 so if we reach 
+        ; 128 we need to reset to zero
+        INC     zp_map_pos_x
+        BIT     zp_map_pos_x
+        BPL     skip_x_reset
 
         ; Reset the y position to 0
         LDA     #$00
-        STA     zp_map_pos_y
-.L0BD9
+        STA     zp_map_pos_x
+        
+.skip_x_reset
+        ; Loop until we have loaded all the map tiles
+        ; in the offscreen buffer
         DEX
-        BPL     L0BB6
+        BPL     loop_get_next_tile
 
         RTS
 
@@ -341,7 +348,7 @@ mode_5_screen_centre =  $6A10
         STA     L0025
         STA     L001A
         STA     L001F
-        STA     L0009
+        STA     zp_aground_colour_cycle_counter
         STA     zp_current_lap
         STA     zp_current_stage
         STA     zp_laps_for_current_stage
@@ -404,9 +411,9 @@ mode_5_screen_centre =  $6A10
         ; Set start of screen address to &5800 for Mode 5
         LDA     #$00
         STA     zp_screen_start_lsb
-        STA     L007A
-        STA     L007C
-        STA     L007B
+        STA     zp_scroll_left_status
+        STA     zp_scroll_down_status
+        STA     zp_scroll_up_status
         LDA     #$58
         STA     zp_screen_start_msb
 
@@ -419,7 +426,7 @@ mode_5_screen_centre =  $6A10
         ; TODO 
         ; Set these to $FF / 255
         LDA     #$FF
-        STA     L0079
+        STA     zp_scroll_right_status
         STA     L000F
         STA     L002A
 
@@ -516,8 +523,8 @@ mode_5_screen_centre =  $6A10
 
         ; TODO More variables reset
         LDA     #$00
-        STA     L007C
-        STA     L007B
+        STA     zp_scroll_down_status
+        STA     zp_scroll_up_status
         STA     L000C
 
         ; TODO LOOKING (Big function)
@@ -705,13 +712,13 @@ mode_5_screen_centre =  $6A10
         ; Neat way to check to see if a memory
         ; address is set in 7B/7C - if either
         ; has a value, don't branch
-        LDA     L007C
-        EOR     L007B
+        LDA     zp_scroll_down_status
+        EOR     zp_scroll_up_status
         BEQ     L0E12
 
-        ; Check to see if the value in L007B
+        ; Check to see if the value in zp_scroll_up_status
         ; is negative - if it's positive, branch
-        BIT     L007B
+        BIT     zp_scroll_up_status
         BPL     L0DCB
 
         DEC     L0078
@@ -725,13 +732,13 @@ mode_5_screen_centre =  $6A10
         ; Neat way to check to see if a memory
         ; address is set in 7B/7C - if either
         ; has a value, don't branch
-        LDA     L0079
-        EOR     L007A
+        LDA     zp_scroll_right_status
+        EOR     zp_scroll_left_status
         BEQ     L0E85
 
-        ; Check to see if the value in L0079
+        ; Check to see if the value in zp_scroll_right_status
         ; is negative - if it's positive, branch
-        BIT     L0079
+        BIT     zp_scroll_right_status
         BPL     L0E58
 
         ; If 77 is positive then branch...
@@ -775,16 +782,16 @@ mode_5_screen_centre =  $6A10
         STA     zp_screen_start_msb
 
         LDA     L0078
-        STA     zp_map_pos_x
+        STA     zp_map_pos_y
         LDA     L0077
         CLC
         ADC     #$27
         AND     #$7F
-        STA     zp_map_pos_y
+        STA     zp_map_pos_x
         JSR     L0B40
 
 .L0E58
-        BIT     L007A
+        BIT     zp_scroll_left_status
         BPL     L0E85
 
         DEC     L0077
@@ -809,9 +816,9 @@ mode_5_screen_centre =  $6A10
         STA     copy_graphics_target + 2
 
         LDA     L0078
-        STA     zp_map_pos_x
-        LDA     L0077
         STA     zp_map_pos_y
+        LDA     L0077
+        STA     zp_map_pos_x
         JSR     L0B40    
 
 .L0E85
@@ -822,15 +829,15 @@ mode_5_screen_centre =  $6A10
 
         JSR     fn_set_6845_screen_start_addresss
 
-        LDA     L007C
-        EOR     L007B
+        LDA     zp_scroll_down_status
+        EOR     zp_scroll_up_status
         BEQ     L0E98
 
         JSR     L0F5B
 
 .L0E98
-        LDA     L0079
-        EOR     L007A
+        LDA     zp_scroll_right_status
+        EOR     zp_scroll_left_status
         BEQ     L0EA1
 
         JSR     fn_copy_tile_column_to_screen  
@@ -1084,14 +1091,128 @@ mode_5_screen_centre =  $6A10
         BEQ     no_left_or_right_detected
         BNE     left_or_right_detected
 
-;....
+;L0F5B
+.fn_copy_tile_row_to_screen
+        ; Get the copy graphics target MSB
+        ; Check to see if we're on the last row of the screen?
+        LDA     copy_graphics_row_target + 2
+        CMP     #$7E
+        ; If the screen write address is before $7E00 we can
+        ; bulk copy 
+        ; If A < $ 7E then branch
+        BCC     bulk_copy_tile_row_to_screen
+
+        ; If A != $7E then branch
+        BNE     byte_copy_tile_row_to_screen
+
+        ; if A>=M then branch
+        LDA     byte_copy_graphics_row_target + 1
+        CMP     #$AA
+        BCS     copy_tile_row_to_screen
+
+;L0F6B
+.bulk_copy_tile_row_to_screen
+        ; The 320 bytes that will be copied will not cross 
+        ; the screen threshold so this section bulk copies
+        ; without checking for screen memory overflow
+        ;
+        ; Only used to copy if the start memory address for the
+        ; screen is $7E00 - $7EA9
+        ; Get the target write graphic 
+        ; screen address MSB
+        LDA     copy_graphics_row_target + 2
+        STA     screen_target_block_one + 2
+        STA     screen_target_block_two + 2
+        STA     screen_target_block_three + 2
+        STA     screen_target_block_four + 2
+        
+        ; Get the target screen address LSB
+        ; First block copy in the loop will write here
+        LDA     copy_graphics_row_target + 1
+        STA     screen_target_block_one +1
+
+        ; Add $50 / 80 to the LSB
+        ; Second block copy in the loop will write
+        ; from +$50 from the first block
+        CLC
+        ADC     #$50
+        STA     screen_target_block_two + 1
+        BCC     skip_second_block_msb_increment
+
+        ; If there was an overflow, increment the MSB
+        INC     screen_target_block_two + 2 
+        INC     screen_target_block_three + 2
+        INC     screen_target_block_four + 2
+
+        CLC
+.skip_second_block_msb_increment
+        ; Add $50 / 80 to the LSB
+        ; Third block copy in the loop will write
+        ; from +$A0 ($50 + $50) from the first block
+        ADC     #$50
+        STA     screen_target_block_three + 1
+        BCC     skip_third_block_msb_increment
+
+        INC     screen_target_block_three + 2
+        INC     screen_target_block_four + 2
+        CLC
+.skip_third_block_msb_increment
+        ; Add $50 / 80 to the LSB
+        ; Fourth block copy in the loop will write
+        ; from +$F0 ($50 + $50 + $50) from the first block
+        ADC     #$50
+        STA     screen_target_block_four + 1
+        BCC     skip_fourth_block_msb_increment 
+
+        INC     screen_target_block_four + 2
+        CLC
+.skip_fourth_block_msb_increment
+
+        ; Each full row in Mode 5 is 320 bytes
+        ; The loop copies in 4 parallel blocks
+        ; which is 4 * 80 = 320
+        LDX     #$4F
+
+.loop_copy_next_four_bytes
+        ; Location 0600 to 073F is used to off screen buffer 
+        ; the map tiles before writing them to the screen
+        ; This loop copies all 320 bytes to the screen
+        ; taking 4 bytes per iteration of the loop
+
+        ; Copy block one
+        LDA     L0600,X
+.screen_target_block_one
+        STA     dummy_screen_start,X
+
+        ; Copy block two
+        LDA     L0650,X
+.screen_target_block_two
+        STA     dummy_screen_start,X
+
+        ; Copy block three
+        LDA     L06A0,X
+.screen_target_block_three
+        STA     dummy_screen_start,X
+
+        ; Copy block four
+        LDA     L06F0,X
+.screen_target_block_four
+        STA     dummy_screen_start,X
+        DEX
+        BPL     loop_copy_next_four_bytes
+
+        RTS
 
 ;L0FC9
-.fn_copy_tile_row_to_screen
+.byte_copy_tile_row_to_screen
+        ; The 320 bytes that will be copied WILL cross 
+        ; the screen threshold so this section checks after
+        ; each 8 bytes if it needs to wrap around screen address
+
         ; $0600 is the map tile off screen buffer for rows
         ; Tiles are assembled here before writing to the 
         ; screen
-        ; Write the load address 
+        ; Write the off screen buffer load address 
         LDA     #$00
         STA     copy_graphics_row_source + 1
         LDA     #$06
@@ -1449,7 +1570,7 @@ mode_5_screen_centre =  $6A10
 
 .fn_toggle_get_ready_icon
         LDA     #$00
-        STA     L0008
+        STA     zp_boat_aground_status
 
         ; Get the source buffer for the get ready
         ; icon (where it's already been cached)
@@ -1517,12 +1638,12 @@ mode_5_screen_centre =  $6A10
         CMP     (zp_general_purpose_lsb),Y
         BEQ     check_same_as_target
 
-        ; TODO Don't know what L0008 is...
+        ; TODO Don't know what zp_boat_aground_status is...
         ; Set some flag... 
         ; And always branch (as it's always negative)
         ; Different graphic?
         LDA     #$FF
-        STA     L0008
+        STA     zp_boat_aground_status
         BMI     write_get_ready_byte_to_screen
 
 ;L113F
@@ -1540,7 +1661,7 @@ mode_5_screen_centre =  $6A10
 
         ; TODO different graphic?
         LDA     #$FF
-        STA     L0008
+        STA     zp_boat_aground_status
 
 ;L114B
 .write_get_ready_byte_to_screen
@@ -1608,8 +1729,8 @@ mode_5_screen_centre =  $6A10
         LDA     zp_graphics_screen_or_buffer_msb
         ADC     #$01
 
-        ; Check it didn't go over $7FFF, if so wrap it 
-        ; around
+        ; Check it hasn't gone over $7FFF
+        ; and handle it if it has
         JSR     fn_check_screen_start_address
 
         CLC
@@ -1619,13 +1740,167 @@ mode_5_screen_centre =  $6A10
         BPL     get_get_ready_next_chunk
 
         RTS
-;117F
-;...  
+;118A
+.L118A
+        ; Undraw the boat (it's EOR'd)
+        JSR     fn_draw_boat_on_screen
+
+        ; If left and right scroll directions are both
+        ; detected then branch away, otherwise,
+        ; check individually for left and right
+        LDA     zp_scroll_right_status
+        AND     zp_scroll_left_status
+        BNE     check_scroll_vertical
+
+        ; Check for scroll right
+        BIT     zp_scroll_right_status
+        BPL     check_scroll_left
+
+        ; Add 8 bytes to the screen start address
+        ; to scroll the right edge of the screen
+        LDA     zp_screen_target_lsb
+        CLC
+        ADC     #$08
+        STA     zp_screen_target_lsb
+        BCC     check_scroll_left
+
+        ; Add the carry to the MSB
+        LDA     zp_screen_target_msb
+        ADC     #$00
+
+        ; Check it hasn't gone over $7FFF
+        ; and handle it if it has
+        JSR     fn_check_screen_start_address
+        STA     zp_screen_target_msb
+
+.check_scroll_left
+        ; Check for scroll left
+        BIT     zp_scroll_left_status
+        BPL     check_scroll_vertical
+
+        ; Subtract 8 bytes to the screen start address
+        ; to scroll the left edge of the screen
+        LDA     zp_screen_target_lsb
+        SEC
+        SBC     #$08
+        STA     zp_screen_target_lsb
+        BCS     check_scroll_vertical
+
+        LDA     zp_screen_target_msb
+        SBC     #$00
+        ; Check it hasn't gone under $5800
+        ; and handle it if it has
+        JSR     fn_check_screen_start_address
+
+        STA     zp_screen_target_msb
+
+.check_scroll_vertical
+        ; If both scroll up and down are set then
+        ; branch (do nothing)
+        LDA     zp_scroll_down_status
+        AND     zp_scroll_up_status
+        BNE     set_boat_rotation_graphic
+
+        ; Check for scroll up (top of screen)
+        BIT     zp_scroll_up_status
+        BPL     check_scroll_down
+
+        ; Subtract $140 bytes to the screen start address
+        ; to scroll up (the top edge of the screen)
+        LDA     zp_screen_target_lsb
+        SEC
+        SBC     #$40
+        STA     zp_screen_target_lsb
+        LDA     zp_screen_target_msb
+        SBC     #$01
+
+        ; Check it hasn't gone under $5800
+        ; and handle it if it has
+        JSR     fn_check_screen_start_address
+        STA     zp_screen_target_msb
+
+.check_scroll_down
+        ; Scroll for scroll down (bottom of screen)
+        BIT     zp_scroll_down_status
+        BPL     set_boat_rotation_graphic
+
+        ; Add $140 bytes to the screen start address
+        ; to scroll down (the bottom edge of the screen)
+        LDA     zp_screen_target_lsb
+        CLC
+        ADC     #$40
+        STA     zp_screen_target_lsb
+        LDA     zp_screen_target_msb
+        ADC     #$01
+
+        ; Check it hasn't gone over $7FFF
+        ; and handle it if it has
+        JSR     fn_check_screen_start_address
+        STA     zp_screen_target_msb
+
+.set_boat_rotation_graphic
+        ; Set the source graphic location for the boat
+        ; based on its current rotation
+        LDX     zp_boat_direction
+        LDA     boat_graphic_location_lsb,X
+        STA     zp_graphics_source_lsb
+        LDA     boat_graphic_location_msb,X
+        STA     zp_graphics_source_msb
+        JSR     fn_toggle_get_ready_icon
+
+
+        ; Has the boat run aground? If so we need to
+        ; colour cycle the screen every 4th time
+        ; through here.  Status is set to $FF when
+        ; the boat is aground
+        BIT     zp_boat_aground_status
+        BPL     boat_not_aground
+
+        ; Colour cycle only show when status is zero
+        ; Whenever the colour cycle is called, it's 
+        ; reset to 4 so only flashes ever 4th time around
+        ; loop
+        LDA     zp_aground_colour_cycle_counter
+        BNE     skip_colour_cycle
+
+        ; Colour cycle the screen and slow down
+        JMP     fn_colour_cycle_screen
+
+.boat_not_aground
+        ; Boat isn't on land anymore - reset the 
+        ; the colour cycle count down to zero so
+        ; when it is, it'll go straight to colour
+        ; cycle above
+        LDA     #$00
+        STA     zp_aground_colour_cycle_counter
+        RTS
+
+.skip_colour_cycle
+        DEC     zp_aground_colour_cycle_counter
+        RTS
+
+        ; 16 boat graphics for when the boat rotates
+        ; around in the following order:
+        ; N, NNW, NW, NWW, W, WSW, SW, SSW
+        ; S, SSE, SE, ESE, E, ENE, NE, NNE
+        ;
+        ; Each graphic is 160 bytes across 3 chunks
+        ;
+        ; 120F
+.boat_graphic_location_lsb
+        EQUB    $00,$A0,$40,$E0,$80,$20,$C0,$60
+        EQUB    $00,$A0,$40,$E0,$80,$20,$C0,$60
+
+        ; 121F
+.boat_graphic_location_msb
+        EQUB    $1E,$1E,$1F,$1F,$20,$21,$21,$22
+        EQUB    $23,$23,$24,$24,$25,$26,$26,$27
+
 ;L122F
 .fn_draw_boat_on_screen
-        ; Reset L0008 to zero       
+        ; Reset zp_boat_aground_status to zero       
         LDA     #$00
-        STA     L0008
+        STA     zp_boat_aground_status
 
         ; Copy the boat graphic source address to our 
         ; working variables
@@ -2036,7 +2311,7 @@ accel_key_game = read_accelerate+1
 
         ; TODO Reset something to 4...
         LDA     #$04
-        STA     L0009
+        STA     zp_aground_colour_cycle_counter
 
         ; OSWORD &07
         ; Play boat aground sound one
@@ -3867,7 +4142,7 @@ accel_key_game = read_accelerate+1
 
         ; add zero to 71 (still 55)
 
-        ;Tile address = (MSB00) / 2 + $3000 + LSB
+        ; Tile address = (MSB00) / 2 + $3000 + LSB
         LDA     #$00
         ADC     zp_graphics_tiles_storage_msb
         STA     zp_graphics_tiles_storage_msb

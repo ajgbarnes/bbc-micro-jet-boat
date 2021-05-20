@@ -26,7 +26,7 @@ graphics_buffer_start = $0A00
 mode_5_screen_centre =  $6A10
 
 ;L0B40
-.fn_write_tiles_to_off_screen_buffer
+.fn_write_y_tiles_to_off_screen_buffer
         ; Define the off screen buffer where we'll
         ; assemble the right tile graphics, in this
         ; case at $0900
@@ -112,35 +112,37 @@ mode_5_screen_centre =  $6A10
         ADC     #$28
         RTS
 
-; This routine is called with an (x,y) tile coordinates 
-; stored in zero page.
-; 
-; This routine does two key things:
-; 1. Works out the tile type for the (x,y)
-; 2. Looks up where the tile graphic data is held in memory;; 
-;
-; All the tile ty-pe data for all (x,y) coordinates is held
-; starting at $3000.  
-;       0 =< x < 128
-;       0 =< y < 80
-; 
-; So 128 tiles across the map
-; So 128 tiles down the map
-;
-; Simple algorithm for (x,y) tile type lookup
-; 
-;    Tile type memory address = $3000 + ((y * $FF) / 2) + x
-;
-; So first x row (y=0)  is stored $3000 to $307F
-; Next x row     (y=1)  is stored $3080 to $30FF
-; ...
-; Last x row     (y=80) is stored $5780 to $57FF
-;
-; This is then used to look up the tile graphic
+
 
 
 ;L0B7C
 .fn_get_xy_tile_graphic_address
+        ; This routine is called with an (x,y) tile coordinates 
+        ; stored in zero page.
+        ; 
+        ; This routine does two key things:
+        ; 1. Works out the tile type for the (x,y)
+        ; 2. Looks up where the tile graphic data is held in memory;; 
+        ;
+        ; All the tile ty-pe data for all (x,y) coordinates is held
+        ; starting at $3000.  
+        ;       0 =< x < 128
+        ;       0 =< y < 80-
+        ; 
+        ; So 128 tiles across the map
+        ; So 128 tiles down the map
+        ;
+        ; Simple algorithm for (x,y) tile type lookup
+        ; 
+        ;    Tile type memory address = $3000 + ((y * $FF) / 2) + x
+        ;
+        ; So first x row (y=0)  is stored $3000 to $307F
+        ; Next x row     (y=1)  is stored $3080 to $30FF
+        ; ...
+        ; Last x row     (y=80) is stored $5780 to $57FF
+        ;
+        ; This is then used to look up the tile graphic
+
         ; Treats y as $x00 and divides by 2
         ; and adds x
         LDA     zp_map_pos_y
@@ -201,16 +203,23 @@ mode_5_screen_centre =  $6A10
         INC     zp_general_purpose_msb
         ; Carry can never be set here, this just ends the function
         BCC     get_tile_type_and_graphic_address 
-
-; TUESDAY'S FUNCTION      
-.L0BAC
+    
+;L0BAC
+.fn_write_x_tiles_to_off_screen_buffer
+        ; Gets a horizontal row of tile graphics and
+        ; puts them in the off screen buffer (to either)
+        ; scroll up or down - they are not written to the screen
+        ; here
         
-        ; Tile graphic buffer storage location
+        ; Set the Tile graphic off screen buffer - $0600
+        ; This is used for rows of tiles only
         LDA     #$00
         STA     zp_graphics_tiles_storage_lsb
         LDA     #$06
         STA     zp_graphics_tiles_storage_lsb
-        ; In Mode 5 the screen is $27 / 39
+
+        ; In Mode 5 the screen has $27 / 39 columns of bytes
+        ; So we need tiles for all of those bytes
         LDX     #$27
 .loop_get_next_tile
         ; Find the source address for the tile
@@ -251,7 +260,7 @@ mode_5_screen_centre =  $6A10
         BIT     zp_map_pos_x
         BPL     skip_x_reset
 
-        ; Reset the y position to 0
+        ; Reset the y position to 0 as it went above 128
         LDA     #$00
         STA     zp_map_pos_x
         
@@ -709,48 +718,140 @@ mode_5_screen_centre =  $6A10
         JMP     OSBYTE
 
 .L0D98
-        ; Neat way to check to see if a memory
-        ; address is set in 7B/7C - if either
-        ; has a value, don't branch
+        ; Check to see if either scroll up 
+        ; or down has been set (ignore if neither
+        ; or both). Neat way to check.
         LDA     zp_scroll_down_status
         EOR     zp_scroll_up_status
         BEQ     L0E12
 
-        ; Check to see if the value in zp_scroll_up_status
-        ; is negative - if it's positive, branch
+        ; Check to see if a scroll up is happening
+        ; (will be set to $FF so negative) if not,
+        ; branch ahead
         BIT     zp_scroll_up_status
-        BPL     L0DCB
+        BPL     check_down_status
 
-        DEC     L0078
-        BPL     L0DAA
+        ; Move the boat position up the screen
+        ; If it goes beyond $7F then reset the position
+        ; to the middle of the screen
+        DEC     zp_boat_ypos
+        BPL     skip_boat_ypos_reset 
 
-        ; Set to 79 or 80
+        ; Reset the boat position to the middle of the
+        ; screen
         LDA     #$4F
-        STA     L0078   
-;
-.L0E12
-        ; Neat way to check to see if a memory
-        ; address is set in 7B/7C - if either
-        ; has a value, don't branch
+        STA     zp_boat_ypos  
+
+.skip_boat_ypos_reset 
+
+        ; 
+        LDA     zp_screen_start_lsb
+        SEC
+        SBC     #$40
+        STA     zp_screen_start_lsb
+        STA     copy_graphics_row_target + 1
+        LDA     zp_screen_start_msb
+        SBC     #$01
+        JSR     fn_check_screen_start_address
+
+        STA     copy_graphics_row_target + 2
+        STA     zp_screen_start_msb
+        LDA     zp_boat_ypos
+        STA     zp_map_pos_y
+        LDA     zp_boat_xpos
+        STA     zp_map_pos_x
+        JSR     fn_write_x_tiles_to_off_screen_buffer
+
+.check_down_status
+        ; Check to see if a scroll down should happen
+        BIT     zp_scroll_down_status
+        ; Branch if not
+        BPL     check_left_right_status
+
+        ; Move the boat down the screen
+        INC     zp_boat_ypos
+        LDA     zp_boat_ypos
+
+        ; If the boat is at position $4F reset it 
+        ; as the screen will wrap around
+        CMP     #$50
+        BNE     skip_boat_xpos_reset
+
+        ; Reset the boat position
+        LDA     #$00
+        STA     zp_boat_ypos
+
+.skip_boat_xpos_reset
+        ; 
+        LDA     zp_screen_start_lsb
+        SEC
+        SBC     #$40
+        STA     copy_graphics_row_target + 1
+        LDA     zp_screen_start_msb
+        SBC     #$01
+        JSR     fn_check_screen_start_address
+        STA     copy_graphics_row_target + 2
+
+        ; Scrolling down adds $140 to the screen
+        ; start address
+        LDA     zp_screen_start_lsb
+        CLC
+        ADC     #$40
+        STA     zp_screen_start_lsb
+        LDA     zp_screen_start_msb
+        ADC     #$01
+        ; Check it didn't go over $7FFF otherwise
+        ; handle the wrapping around
+        JSR     fn_check_screen_start_address
+        STA     zp_screen_start_msb
+
+        ; Update the vertical position of the boat
+        ; by $1E / 30 (why 1E?)
+        LDA     zp_boat_ypos
+        CLC
+        ADC     #$1E
+        CMP     #$50
+        BCC     skip_boat_ypos_decrement
+
+        ; If it's over $50 then reset it by looping it around
+        ; Can only be $50 y positions
+        SEC
+        SBC     #$50
+.skip_boat_ypos_decrement
+        STA     zp_map_pos_y
+
+        LDA     zp_boat_xpos
+        STA     zp_map_pos_x
+        JSR     fn_write_x_tiles_to_off_screen_buffer
+
+.check_left_right_status
+        ; Check to see if a scroll left or right is happening
+        ; If both, it will be ignored
         LDA     zp_scroll_right_status
         EOR     zp_scroll_left_status
+        ; If not, branch ahead
         BEQ     L0E85
 
-        ; Check to see if the value in zp_scroll_right_status
-        ; is negative - if it's positive, branch
+        ; Check to see if it's a scroll right
         BIT     zp_scroll_right_status
+        ; If it isn't branch ahead
         BPL     L0E58
 
-        ; If 77 is positive then branch...
-        INC     L0077
-        LDA     L0077
+        ; Increment the x position of the boat
+        ; (move it right)
+        INC     zp_boat_xpos
+        LDA     zp_boat_xpos
+        ; If the x position of the boat has
+        ; gone further than $7F then reset it
+        ; to zero (map only exists for 0 =< 0 < $80)
         BPL     L0E26
 
+        ; Reset the boat x position to zero
         LDA     #$00
-        STA     L0077
+        STA     zp_boat_xpos
 
 .L0E26
-        ; When scrolling the screen to the left,
+        ; When scrolling the screen to the right,
         ; calculate where the top right pixels will be
         ; Current screen start address + $140 / 320
         ; That's where we're going to write the next
@@ -791,6 +892,7 @@ mode_5_screen_centre =  $6A10
         JSR     L0B40
 
 .L0E58
+        ; Check to see if it's a scroll left
         BIT     zp_scroll_left_status
         BPL     L0E85
 
@@ -800,7 +902,7 @@ mode_5_screen_centre =  $6A10
         LDA     #$7F
         STA     L0077
 .L0E64
-        ; Move the screen right by 4 pixels / one byte
+        ; Move the screen left by 4 pixels / one byte
         ; Calculate the new screen start 
         LDA     zp_screen_start_lsb
         SEC
@@ -850,18 +952,21 @@ mode_5_screen_centre =  $6A10
 
         LDA     #$00
         STA     L000C
-        JSR     L118A   
+        JSR     fn_screen_scroll_rotate_boat_flash_screen 
 
 .L0EAC
         LDA     L000C
         BMI     L0EB3
 
+        ; Write the graphics at the bottom of the screen
+        ; that contain the time, score and lap counter
         JSR     fn_copy_time_score_lap_to_screen
 
 .L0EB3
+        ; Update the score and check if the checkpoint
+        ; has been reached or a lap has been completed
         CLI
-        JSR     L10D6
-
+        JSR     fn_update_score
         JSR     fn_check_checkpoint_or_lap_complete
 
         RTS             
@@ -1741,7 +1846,7 @@ mode_5_screen_centre =  $6A10
 
         RTS
 ;118A
-.L118A
+.fn_screen_scroll_rotate_boat_flash_screen
         ; Undraw the boat (it's EOR'd)
         JSR     fn_draw_boat_on_screen
 
@@ -2380,8 +2485,8 @@ accel_key_game = read_accelerate+1
         ; Scroll the sceen up a row
         JSR     fn_scroll_screen_up
 
-        ; TODO
-        JSR     L101E
+        ; Redraw the time/score/lap counters
+        JSR     fn_copy_time_score_lap_to_screen
 
         ; OSWORD &0C / VDU 19
         ; Change the logical colour palette

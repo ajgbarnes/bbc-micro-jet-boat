@@ -27,15 +27,20 @@ mode_5_screen_centre =  $6A10
 
 ;L0B40
 .fn_write_y_tiles_to_off_screen_buffer
+        ; Gets a vertical column of tile graphics and
+        ; puts them in the off screen buffer (to either)
+        ; scroll left or right - they are not written to the screen
+        ; here
+
         ; Define the off screen buffer where we'll
-        ; assemble the right tile graphics, in this
-        ; case at $0900
+        ; assemble the right tile graphics for a new column
+        ; in this case at $0900 - only used for y scrolling
         LDA     #$00
         STA     zp_graphics_screen_or_buffer_lsb
         LDA     #$09
         STA     zp_graphics_screen_or_buffer_msb
 
-        ; 32 tiles are required (one for each row)
+        ; 32 tiles are required (one for each row in the column)
         LDX     #$1F
 
 ;L0B4A        
@@ -63,16 +68,16 @@ mode_5_screen_centre =  $6A10
         ADC     #$08
         STA     zp_graphics_screen_or_buffer_lsb
 
-        ; Increment the x position in the (x,y)
+        ; Increment the y position in the (x,y)
         ; coordinates
         INC     zp_map_pos_y
         LDA     zp_map_pos_y
 
-        ; The x position can only go up to $50 / 80
+        ; The y position can only go up to $50 / 80
         CMP     #$50
         BNE     get_next_tile
 
-        ; Reset the x position in the (x,y)
+        ; Reset the y position in the (x,y)
         ; coordinates to 0 when greater than or equal
         ; to $50 / 80
         LDA     #$00
@@ -111,9 +116,6 @@ mode_5_screen_centre =  $6A10
         ; Add $2800 to wrap it around
         ADC     #$28
         RTS
-
-
-
 
 ;L0B7C
 .fn_get_xy_tile_graphic_address
@@ -356,7 +358,7 @@ mode_5_screen_centre =  $6A10
         STA     L0024
         STA     L0025
         STA     L001A
-        STA     L001F
+        STA     zp_checkpoint_status
         STA     zp_aground_colour_cycle_counter
         STA     zp_current_lap
         STA     zp_current_stage
@@ -401,21 +403,13 @@ mode_5_screen_centre =  $6A10
         LDA     #$08
         STA     zp_boat_direction
 
-        ; MSB / LSB address? 0B75
-        ; Or start X / Y coordinate.
-        ; Starts at $75, as screen scrolls on increments by one
-        ; Gets reset to zero at $80
-        ; Boat starts:
-        ;        x $1D y $0C
-        ; Triggers checkpoint at y 0E x 58 - 66
-        ; 78 is Y
-        
+        ; Set the initial boat and map position
         LDA     #$75
-        STA     L0077
-        STA     L0074
+        STA     zp_boat_xpos
+        STA     zp_map_pos_x
         LDA     #$0B
-        STA     L0078
-        STA     L0075
+        STA     zp_boat_ypos
+        STA     zp_map_pos_y
 
         ; Set start of screen address to &5800 for Mode 5
         LDA     #$00
@@ -436,7 +430,7 @@ mode_5_screen_centre =  $6A10
         ; Set these to $FF / 255
         LDA     #$FF
         STA     zp_scroll_right_status
-        STA     L000F
+        STA     zp_intro_screen_status
         STA     L002A
 
         ; Set X=0
@@ -492,8 +486,11 @@ mode_5_screen_centre =  $6A10
         ; Check if starting a new game or a new level
         BEQ     new_game_screen_text
 
+        ; Print the next stage text if the player
+        ; has completed 13 laps
         JSR     fn_print_next_stage_text
 
+        ; Go to game set up
         JMP     game_setup
 
 .new_game_screen_text
@@ -530,11 +527,11 @@ mode_5_screen_centre =  $6A10
         ; text off of the screen and scrolls the start
         ; of game map onto the screen
 
-        ; TODO More variables reset
+        ; Reset the following sensors
         LDA     #$00
         STA     zp_scroll_down_status
         STA     zp_scroll_up_status
-        STA     L000C
+        STA     zp_score_already_updated_status
 
         ; TODO LOOKING (Big function)
         ; Is this where it draws the map and scrolls into view
@@ -558,7 +555,7 @@ mode_5_screen_centre =  $6A10
         STA     zp_pre_game_scrolling_status
 
         LDA     #$00
-        STA     L000F
+        STA     zp_intro_screen_status
 
         ; Set the graphics source to the Get Ready Graphic
         ; (it's stored at 04A0)
@@ -568,7 +565,7 @@ mode_5_screen_centre =  $6A10
         STA     zp_graphics_source_msb
 
         ; Show the Get Ready icon
-        JSR     fn_toggle_get_ready_icon
+        JSR     fn_toggle_boat_or_time_graphic
 
         ; Pause for 2 seconds (show icon for 2 seconds)
         ; CA1 System VIA interrupts every 20 ms
@@ -586,10 +583,13 @@ mode_5_screen_centre =  $6A10
         LDA     #$05
         JSR     fn_set_timer_64ms   
         
+        ; Play the boat "put put sounds"
         JSR     fn_play_boat_sounds
 
 ;L0D16
 .main_game_loop
+        ; Use the boat speed to control the map
+        ; scrolling steps
         LDA     zp_boat_speed
         STA     zp_scroll_map_steps
 .L0D1A
@@ -600,17 +600,26 @@ mode_5_screen_centre =  $6A10
 
         JSR     fn_scroll_screen_up
 
+        ; Wait 20 ms
         JSR     fn_wait_20_ms
 
+        ; Update the time / score / lap counters on screen
+        ; to show the final score and laps
         JSR     fn_copy_time_score_lap_to_screen
 
-        JSR     L122F
+        ; Remove the boat from the screen
+        JSR     fn_toggle_boat_on_screen
 
+        ; Set the source graphics buffer to be
+        ; $0400 where the times up graphic is off screen
+        ; buffered
         LDA     #$00
-        STA     L0026
+        STA     zp_graphics_source_lsb
         LDA     #$04
-        STA     L0027
-        JSR     fn_toggle_get_ready_icon
+        STA     zp_graphics_source_msb
+        
+        ; Show the times up icon
+        JSR     fn_toggle_boat_or_time_graphic
 
         ; Flush the buffer for sound channel 0
         LDX     #$04
@@ -644,7 +653,9 @@ mode_5_screen_centre =  $6A10
         ; Disable the interval timer crossing 0 event
         JSR     disable_interval_timer
 
-        JSR     L1797
+        ; Check if the score made the high score table
+        ; and display the high score table
+        JSR     fn_did_score_make_high_score_table
 
         JMP     restart_game
 
@@ -723,7 +734,7 @@ mode_5_screen_centre =  $6A10
         ; or both). Neat way to check.
         LDA     zp_scroll_down_status
         EOR     zp_scroll_up_status
-        BEQ     L0E12
+        BEQ     check_left_right_status
 
         ; Check to see if a scroll up is happening
         ; (will be set to $FF so negative) if not,
@@ -743,8 +754,11 @@ mode_5_screen_centre =  $6A10
         STA     zp_boat_ypos  
 
 .skip_boat_ypos_reset 
+        ; Subtract $140 as the screen is moving up
+        ; so change the graphics row write address
+        ; and the screen start address
 
-        ; 
+        ; Update the LSB by 
         LDA     zp_screen_start_lsb
         SEC
         SBC     #$40
@@ -752,14 +766,20 @@ mode_5_screen_centre =  $6A10
         STA     copy_graphics_row_target + 1
         LDA     zp_screen_start_msb
         SBC     #$01
+        ; If we went below $58xx for the screen address
+        ; reset it to the end of the screen ($7Fxx)
         JSR     fn_check_screen_start_address
-
         STA     copy_graphics_row_target + 2
         STA     zp_screen_start_msb
+
+        ; make the boat (x,y) position the map 
+        ; (x,y) position
         LDA     zp_boat_ypos
         STA     zp_map_pos_y
         LDA     zp_boat_xpos
         STA     zp_map_pos_x
+
+        ; Update the new row that scrolled into view
         JSR     fn_write_x_tiles_to_off_screen_buffer
 
 .check_down_status
@@ -772,7 +792,7 @@ mode_5_screen_centre =  $6A10
         INC     zp_boat_ypos
         LDA     zp_boat_ypos
 
-        ; If the boat is at position $4F reset it 
+        ; If the boat is at position $50 or greater reset it 
         ; as the screen will wrap around
         CMP     #$50
         BNE     skip_boat_xpos_reset
@@ -782,7 +802,7 @@ mode_5_screen_centre =  $6A10
         STA     zp_boat_ypos
 
 .skip_boat_xpos_reset
-        ; 
+        ; TODO Why does it take $140 off and not add on?!?!
         LDA     zp_screen_start_lsb
         SEC
         SBC     #$40
@@ -810,6 +830,8 @@ mode_5_screen_centre =  $6A10
         LDA     zp_boat_ypos
         CLC
         ADC     #$1E
+        ; If the boat is at position $50 or greater reset it 
+        ; as the screen will wrap around
         CMP     #$50
         BCC     skip_boat_ypos_decrement
 
@@ -820,8 +842,11 @@ mode_5_screen_centre =  $6A10
 .skip_boat_ypos_decrement
         STA     zp_map_pos_y
 
+        ; Set the boat position to the map position
         LDA     zp_boat_xpos
         STA     zp_map_pos_x
+        
+        ; Update the new row that scrolled into view
         JSR     fn_write_x_tiles_to_off_screen_buffer
 
 .check_left_right_status
@@ -830,12 +855,12 @@ mode_5_screen_centre =  $6A10
         LDA     zp_scroll_right_status
         EOR     zp_scroll_left_status
         ; If not, branch ahead
-        BEQ     L0E85
+        BEQ     scroll_checks_complete
 
         ; Check to see if it's a scroll right
         BIT     zp_scroll_right_status
         ; If it isn't branch ahead
-        BPL     L0E58
+        BPL     check_left_status
 
         ; Increment the x position of the boat
         ; (move it right)
@@ -844,13 +869,13 @@ mode_5_screen_centre =  $6A10
         ; If the x position of the boat has
         ; gone further than $7F then reset it
         ; to zero (map only exists for 0 =< 0 < $80)
-        BPL     L0E26
+        BPL     skip_boat_xpos_reset2
 
         ; Reset the boat x position to zero
         LDA     #$00
         STA     zp_boat_xpos
 
-.L0E26
+.skip_boat_xpos_reset2
         ; When scrolling the screen to the right,
         ; calculate where the top right pixels will be
         ; Current screen start address + $140 / 320
@@ -882,26 +907,33 @@ mode_5_screen_centre =  $6A10
         JSR     fn_check_screen_start_address
         STA     zp_screen_start_msb
 
-        LDA     L0078
+        ; Set the map position to be the same as the boat
+        LDA     zp_boat_ypos
         STA     zp_map_pos_y
-        LDA     L0077
+
+        ; Add $27 to the x position 
+        ; TODO WHY?
+        LDA     zp_boat_xpos
         CLC
         ADC     #$27
+        ; $7F is the maximum x co-ordinate
         AND     #$7F
         STA     zp_map_pos_x
-        JSR     L0B40
+        JSR     fn_write_y_tiles_to_off_screen_buffer
 
-.L0E58
+.check_left_status
         ; Check to see if it's a scroll left
         BIT     zp_scroll_left_status
-        BPL     L0E85
+        BPL     scroll_checks_complete
 
-        DEC     L0077
-        BPL     L0E64
+        DEC     zp_boat_xpos
+        BPL     skip_boat_xpos_reset3
 
+        ; If the boat position is less than zero,
+        ; reset it to $7F
         LDA     #$7F
-        STA     L0077
-.L0E64
+        STA     zp_boat_xpos
+.skip_boat_xpos_reset3
         ; Move the screen left by 4 pixels / one byte
         ; Calculate the new screen start 
         LDA     zp_screen_start_lsb
@@ -917,52 +949,68 @@ mode_5_screen_centre =  $6A10
         STA     zp_screen_start_msb
         STA     copy_graphics_target + 2
 
-        LDA     L0078
+        LDA     zp_boat_ypos
         STA     zp_map_pos_y
-        LDA     L0077
+        LDA     zp_boat_xpos
         STA     zp_map_pos_x
-        JSR     L0B40    
+        JSR     fn_write_y_tiles_to_off_screen_buffer  
 
 .L0E85
+.scroll_checks_complete
         JSR     fn_scroll_screen_up
 
         SEI
+        ; Wait 20 milliseconds
         JSR     fn_wait_20_ms
 
-        JSR     fn_set_6845_screen_start_addresss
+        ; Update the 6845 with the new sceren start address
+        JSR     fn_set_6845_screen_start_address
 
+        ; Check to see if the screen should be scrolled up or down
+        ; if not, branch ahead.s
         LDA     zp_scroll_down_status
         EOR     zp_scroll_up_status
-        BEQ     L0E98
+        BEQ     skip_row_to_screen_copy
 
-        JSR     L0F5B
+        ; Needs to be scrolled so copy a new row of data to the 
+        ; the screen (addresses have previously been calculated)
+        JSR     fn_copy_tile_row_to_screen
 
-.L0E98
+.skip_row_to_screen_copy
+        ; Check to see if the screen should be scrolled right or 
+        ; left, if not branch ahead
         LDA     zp_scroll_right_status
         EOR     zp_scroll_left_status
-        BEQ     L0EA1
+        BEQ     skip_column_to_screen_copy
 
+        ; Copy the column of tiles to the screen
         JSR     fn_copy_tile_column_to_screen  
 
-.L0EA1
+.skip_column_to_screen_copy
 
 ;gets called 41 times on screen load
-        LDA     L000F
-        BMI     L0EAC
+        ; Check that the intro screen is not being shown, if it 
+        ; is branch ahead
+        LDA     zp_intro_screen_status
+        BMI     skip_rotate_boat_flash_screen
 
+        ; Rest the score update flag
         LDA     #$00
-        STA     L000C
+        STA     zp_score_already_updated_status
         JSR     fn_screen_scroll_rotate_boat_flash_screen 
 
-.L0EAC
-        LDA     L000C
-        BMI     L0EB3
+.skip_rotate_boat_flash_screen
+        ; Show the score at the bottom of the screen
+        ; (even the intro/next stage screen when it
+        ; starts to scroll)
+        LDA     zp_score_already_updated_status
+        BMI     skip_time_score_lap_update
 
         ; Write the graphics at the bottom of the screen
         ; that contain the time, score and lap counter
         JSR     fn_copy_time_score_lap_to_screen
 
-.L0EB3
+.skip_time_score_lap_update
         ; Update the score and check if the checkpoint
         ; has been reached or a lap has been completed
         CLI
@@ -971,11 +1019,12 @@ mode_5_screen_centre =  $6A10
 
         RTS             
 
-; changing the screen start address?
-; screen start address must be divided by 8 
-; before sending
 ;0EBB
 .fn_set_6845_screen_start_address
+        ; Changes the screen start address
+        ; screen start address must be divided by 8 
+        ; before setting
+
         ; Set the new screen start address in the 6845
         ; registers 12 and 13
         LDA     zp_screen_start_lsb
@@ -1673,7 +1722,17 @@ mode_5_screen_centre =  $6A10
         ; Redraw the score on screen
         JMP     fn_draw_current_score
 
-.fn_toggle_get_ready_icon
+.fn_toggle_boat_or_time_graphic
+        ; Shows or hides the boat, get ready or times up
+        ; graphics - depending on which memory address is 
+        ; referenced in zp_graphics_source_lsb/msb
+        ; Caller must set that appropriately for what they want
+        ; but generally:
+        ;   $0400 is the times up graphic
+        ;   $04A0 is the get ready graphic
+        ;   Anything else is the boat graphic
+
+        ; Reset the boat aground status indicator
         LDA     #$00
         STA     zp_boat_aground_status
 
@@ -1848,7 +1907,7 @@ mode_5_screen_centre =  $6A10
 ;118A
 .fn_screen_scroll_rotate_boat_flash_screen
         ; Undraw the boat (it's EOR'd)
-        JSR     fn_draw_boat_on_screen
+        JSR     fn_toggle_boat_on_screen
 
         ; If left and right scroll directions are both
         ; detected then branch away, otherwise,
@@ -1951,7 +2010,7 @@ mode_5_screen_centre =  $6A10
         STA     zp_graphics_source_lsb
         LDA     boat_graphic_location_msb,X
         STA     zp_graphics_source_msb
-        JSR     fn_toggle_get_ready_icon
+        JSR     fn_toggle_boat_or_time_graphic
 
 
         ; Has the boat run aground? If so we need to
@@ -2002,7 +2061,7 @@ mode_5_screen_centre =  $6A10
         EQUB    $23,$23,$24,$24,$25,$26,$26,$27
 
 ;L122F
-.fn_draw_boat_on_screen
+.fn_toggle_boat_on_screen
         ; Reset zp_boat_aground_status to zero       
         LDA     #$00
         STA     zp_boat_aground_status
@@ -2111,6 +2170,7 @@ mode_5_screen_centre =  $6A10
 .fn_check_keys_and_joystick
         ; Read key presses and joystick 
         ; and turn or accelerate boat
+
         ;  TODO 
         JSR     L1308
 
@@ -2130,7 +2190,7 @@ mode_5_screen_centre =  $6A10
 
         ; Remove the Get Ready icon
         ; And remove the boat? 
-        JSR     fn_toggle_get_ready_icon
+        JSR     fn_toggle_boat_or_time_graphic
 
         ; Check to see if the joystick
         ; is pushed left
@@ -2232,7 +2292,7 @@ right_key_game = read_right_key+1
 .check_accelerate
         JSR     fn_check_joystick_button
 
-        BNE     L12F1
+        BNE     accelerate_detected
 
 .read_accelerate
         ; Check to see if the accelerate key has been pressed
@@ -2247,7 +2307,7 @@ accel_key_game = read_accelerate+1
         ; If key is being pressed then X will be $FF
         ; If it wasn't then branch ahead to check accelerate
         CPX     #$FF
-        BNE     L1303
+        BNE     redraw_screen
 
 ;L12F1
 .accelerate_detected
@@ -2282,7 +2342,7 @@ accel_key_game = read_accelerate+1
         ; TODO
 ; 1303
 .redraw_screen
-        JSR     L11ED
+        JSR     set_boat_rotation_graphic
 
         ; Enable maskable interrupts and return
         CLI
@@ -2480,7 +2540,7 @@ accel_key_game = read_accelerate+1
         JSR     OSBYTE
 
         LDA     #$FF
-        STA     L000C
+        STA     zp_score_already_updated_status
 
         ; Scroll the sceen up a row
         JSR     fn_scroll_screen_up
@@ -3135,10 +3195,10 @@ accel_key_game = read_accelerate+1
         SEC
         SBC     #$40
         STA     write_to_screen_address + 1
+
         LDA     zp_screen_start_msb
         SBC     #$01
         JSR     fn_check_screen_start_address
-
         STA     write_to_screen_address + 2
         RTS
 

@@ -298,18 +298,17 @@ mode_5_screen_centre =  $6A10
 
 ; 0BF8
 .fn_game_start
-        ; Reset the stack pointer (not sure why)
+        ; Reset the stack pointer (start "clean")
         LDX     #$FF
         TXS
         
-        ; Set the Break intercept vector to JMP to 0BDD
-        ; Well don't because the  JMP isn't set to $47
-        ; Wonder what 0BDD does...
+        ; Set the Break intercept vector to JMP to 
+        ; the game's break handler
         LDA     #$00
         STA     break_intercept_jmp_vector
-        LDA     #$DD
+        LDA     #$LO(fn_break_handler)
         STA     break_intercept_lsb_vector
-        LDA     #$0B
+        LDA     #$HI(fn_break_handlers)
         STA     break_intercept_msb_vector
 
 .restart_game
@@ -330,23 +329,6 @@ mode_5_screen_centre =  $6A10
         JSR     OSBYTE
 
         ; Initialize variables to zero
-        ; Missing 0002, 0005, 0008, 0013-0018
-        ; 0003
-        ; 0004
-        ; 0006
-        ; 0007
-        ; 0009
-        ; 0010
-        ; 0011
-        ; 0012
-        ; 0019
-        ; 001A
-        ; 001F
-        ; 0024
-        ; 0025
-        ; 0062
-        ; 0063
-        ; 0064
         LDA     #$00
         STA     zp_turn_left_counter
         STA     zp_turn_right_counter
@@ -366,25 +348,31 @@ mode_5_screen_centre =  $6A10
         STA     zp_stage_completed_status
 
         ; Look up the current lap time for completion
+        ; varies by stage and gets less and less per new
+        ; stage.  A stage is 13 laps
         LDX     zp_current_lap
         LDA     stage_lap_times,X
         STA     zp_time_remaining_secs
         DEC     zp_time_remaining_secs
 
-        ; start of loop 0004 is zero
-        LDA     L0004
+        ; Set 0 and 1 to the turn right counter...
+        LDA     zp_turn_right_counter
         STA     L0000
         STA     L0001
 
         ; Set the event handler for interval timer crossing 0 
         ; to be the set timer function
-        LDA     #fn_set_timer_64ms MOD 256
+        LDA     #$LO(fn_set_timer_64ms)
         STA     eventv_lsb_vector
-        LDA     #fn_set_timer_64ms DIV 256
+        LDA     #$HI(fn_set_timer_64ms DIV 256)
         STA     eventv_msb_vector
 
 ;L0C57
 .new_stage
+        ; Disable interval timer crossing 0 event
+        ; timer increments every centisecond - don't 
+        ; need this running during game setup, just during
+        ; the game
         JSR     disable_interval_timer
 
         ; Clear sound channels - for some reason
@@ -421,13 +409,13 @@ mode_5_screen_centre =  $6A10
         STA     zp_screen_start_msb
 
         ; Store the vdu parameter block address in 1B and 1C
-        LDA     #mode_5_screen_centre MOD 256
+        LDA     #$LO(mode_5_screen_centre)
         STA     zp_screen_target_lsb
-        LDA     #mode_5_screen_centre DIV 256
+        LDA     #$HI(mode_5_screen_centre)
         STA     zp_screen_target_msb
 
-        ; TODO 
-        ; Set these to $FF / 255
+        ; Set the statuses that the screen is scrolling
+        ; right and that it's the intro screen
         LDA     #$FF
         STA     zp_scroll_right_status
         STA     zp_intro_screen_status
@@ -535,7 +523,7 @@ mode_5_screen_centre =  $6A10
 
         ; TODO LOOKING (Big function)
         ; Is this where it draws the map and scrolls into view
-        JSR     L0D98          
+        JSR     fn_scroll_screen_and_update
 
         ; Wait for 60 ms before scrolling into view again
         ; CA1 System VIA interrupts every 20 ms
@@ -700,7 +688,7 @@ mode_5_screen_centre =  $6A10
 
         JSR     L1451
 
-        JSR     L0D98
+        JSR     fn_scroll_screen_and_update
 
         ; Check to see if the stage has been
         ; completed - if it has go back to the the
@@ -728,7 +716,8 @@ mode_5_screen_centre =  $6A10
         LDA     #$81
         JMP     OSBYTE
 
-.L0D98
+;L0D98
+.fn_scroll_screen_and_update
         ; Check to see if either scroll up 
         ; or down has been set (ignore if neither
         ; or both). Neat way to check.
@@ -4215,9 +4204,9 @@ accel_key_game = read_accelerate+1
         INY
         LDA     (L002B),Y
         STA     L002F
-        INY
 
         ; Get the value at that address + 2 and store it in 30  
+        INY
         LDA     (L002B),Y
         STA     L0030
 .L1B5B

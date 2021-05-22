@@ -16,6 +16,33 @@
 ; timer_poke+1  =4
 ; ?&1605=4 or after load before execution ?&1BC5=4 
 
+; Open or close a file
+OSFIND = $FFCE
+; Load or save a block of memory to a file 	
+OSGBPB = $FFD1
+; Save a single byte to file from A
+OSBPUT = $FFD4 
+; Load a single byte to A from file
+OSBGET = $FFD7
+; Load or save data about a file
+OSARGS = $FFDA
+; Load or save a complete file
+OSFILE = $FFDD
+; Read character (from keyboard) to A
+OSRDCH = $FFE0 
+; Write a character (to screen) from A plus LF if (A)=&0D
+OSASCI = $FFE3
+; Write LF,CR (&0A,&0D) to screen 
+OSNEWL = $FFE7
+; Write character (to screen) from A
+OSWRCH = $FFEE
+; Perfrom miscellaneous OS operation using control block to pass parameters
+OSWORD = $FFF1
+; Perfrom miscellaneous OS operation using registers to pass parameters
+OSBYTE = $FFF4
+; Interpret the command line given 
+OSCLI = $FFF7
+
 VDU_CURRENT_SCREEN_MODE = $0355
 eventv_lsb_vector = $0220
 eventv_msb_vector = $0221
@@ -24,6 +51,105 @@ dummy_screen_start = $8000
 dummy_graphics_load_start = $8000
 graphics_buffer_start = $0A00
 mode_5_screen_centre =  $6A10
+
+; Unidentified zero page variables
+
+
+L0019   = $0019
+L001A   = $001A
+zp_down_on_this_loop_status   = $0024
+L0025   = $0025
+L002A   = $002A
+L002B   = $002B
+L002C   = $002C
+L002D   = $002D
+L002E   = $002E
+L002F   = $002F
+L0030   = $0030
+L0031   = $0031
+L0032   = $0032
+L0033   = $0033
+L0045   = $0045
+L0053   = $0053
+
+; Zero page variables
+; Indicates the direction the boat is facing
+; and to what degree
+; 0 - going fully left
+; 4 - facing up or down
+; 8 - going fully right 
+zp_boat_left_right_amount = $0000
+
+; Indicates the direction the boat is facing
+; and to what degree
+; 0 - going fully up
+; 4 - facing left or right
+; 8 - going fully down
+zp_boat_up_down_amount = $0001
+
+; 
+zp_boat_direction = $0002
+zp_turn_left_counter = $0003
+zp_turn_right_counter = $0004
+zp_boat_speed = $0005
+zp_acceleration_counter = $0006
+zp_decelerate_counter = $0007
+zp_boat_aground_status = $0008
+zp_aground_colour_cycle_counter=$0009
+zp_wait_interrupt_count = $000A
+zp_graphics_chunks_remaining = $000B
+zp_score_already_updated_status = $000C
+zp_number_for_digits_lsb = $000D 
+zp_number_for_digits_msb = $000E
+zp_intro_screen_status = $000F
+zp_score_lsb = $0010
+zp_score_msb = $0011
+zp_current_lap = $0012
+zp_display_digits = $0013
+zp_time_remaining_secs = $0014
+zp_graphics_numbers_lsb = $0015
+zp_graphics_numbers_msb = $0016
+zp_graphics_numbers_target_storage_lsb = $0017
+zp_graphics_numbers_target_storage_msb = $0018
+zp_screen_target_lsb = $001B
+zp_screen_target_msb = $001C
+zp_scroll_map_steps = $001D
+zp_checkpoint_status = $001F
+zp_high_score_position = $0020
+zp_high_score_name_lsb = $0021
+zp_high_score_name_msb = $0022
+zp_pre_game_scrolling_status = $0023
+zp_graphics_source_lsb = $0026
+zp_graphics_source_msb = $0027
+zp_text_colour = $0061
+zp_current_stage = $0062
+zp_laps_for_current_stage = $0063
+zp_stage_completed_status = $0064
+zp_addr_fn_boat_direction_lsb =  $0065
+zp_addr_fn_boat_direction_msb =  $0066
+zp_graphics_tiles_storage_lsb = $0070
+zp_graphics_tiles_storage_msb = $0071
+zp_general_purpose_lsb = $0072
+zp_general_purpose_msb = $0073
+zp_map_pos_x = $0074
+zp_map_pos_y = $0075
+zp_screen_start_div_8_lsb = $0076
+zp_boat_xpos = $0077
+zp_boat_ypos = $0078
+zp_scroll_right_status = $0079
+zp_scroll_left_status = $007A
+zp_scroll_up_status = $007B
+zp_scroll_down_status = $007C
+zp_screen_start_msb = $007E
+zp_screen_start_lsb = $007D
+
+; Break Intercept vectors
+break_intercept_jmp_vector = $0287
+break_intercept_lsb_vector = $0288
+break_intercept_msb_vector = $0289
+
+
+ORG $0B40
 
 ;L0B40
 .fn_write_y_tiles_to_off_screen_buffer
@@ -36,15 +162,15 @@ mode_5_screen_centre =  $6A10
         ; assemble the right tile graphics for a new column
         ; in this case at $0900 - only used for y scrolling
         LDA     #$00
-        STA     zp_graphics_screen_or_buffer_lsb
+        STA     zp_graphics_tiles_storage_lsb
         LDA     #$09
-        STA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_msb
 
         ; 32 tiles are required (one for each row in the column)
         LDX     #$1F
 
 ;L0B4A        
-.loop_get_next_tile
+.loop_get_next_y_tile
         ; Get the memory address of the nth tile's
         ; source graphic
         JSR     fn_get_xy_tile_graphic_address
@@ -55,18 +181,18 @@ mode_5_screen_centre =  $6A10
 .loop_next_tile_byte
         ; to the off screen buffer
         LDA     (zp_general_purpose_lsb),Y
-        STA     (zp_graphics_screen_or_buffer_lsb),Y
+        STA     (zp_graphics_tiles_storage_lsb),Y
         DEY
         ; If there are still some bytes left to copy
         ; loop around
-        BPL     next_tile_byte
+        BPL     loop_next_tile_byte
 
         ; Increment the write address of the off screen
         ; buffer by 8 bytes 
-        LDA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_graphics_tiles_storage_lsb
         CLC
         ADC     #$08
-        STA     zp_graphics_screen_or_buffer_lsb
+        STA     zp_graphics_tiles_storage_lsb
 
         ; Increment the y position in the (x,y)
         ; coordinates
@@ -85,7 +211,7 @@ mode_5_screen_centre =  $6A10
 .get_next_tile
         ; Do we still have some of the 32 tiles to get?
         DEX
-        BPL     loop_get_next_tile
+        BPL     loop_get_next_y_tile
 
         RTS
 
@@ -223,7 +349,7 @@ mode_5_screen_centre =  $6A10
         ; In Mode 5 the screen has $27 / 39 columns of bytes
         ; So we need tiles for all of those bytes
         LDX     #$27
-.loop_get_next_tile
+.loop_get_next_x_tile
         ; Find the source address for the tile
         ; Ths is going to be copied into the off
         ; screen buffer
@@ -270,7 +396,7 @@ mode_5_screen_centre =  $6A10
         ; Loop until we have loaded all the map tiles
         ; in the offscreen buffer
         DEX
-        BPL     loop_get_next_tile
+        BPL     loop_get_next_x_tile
 
         RTS
 
@@ -306,9 +432,9 @@ mode_5_screen_centre =  $6A10
         ; the game's break handler
         LDA     #$00
         STA     break_intercept_jmp_vector
-        LDA     #$LO(fn_break_handler)
+        LDA     #LO(fn_break_handler)
         STA     break_intercept_lsb_vector
-        LDA     #$HI(fn_break_handlers)
+        LDA     #HI(fn_break_handler)
         STA     break_intercept_msb_vector
 
 .restart_game
@@ -316,7 +442,6 @@ mode_5_screen_centre =  $6A10
         ; and disable escape key (*FX 200,3)
         ; OSBYTE &C8
         LDA     #$C8
-.L0C0C
         LDX     #$03
         LDY     #$00
         JSR     OSBYTE
@@ -337,7 +462,7 @@ mode_5_screen_centre =  $6A10
         STA     zp_score_lsb
         STA     zp_score_msb
         STA     L0019
-        STA     L0024
+        STA     zp_down_on_this_loop_status
         STA     L0025
         STA     L001A
         STA     zp_checkpoint_status
@@ -357,14 +482,14 @@ mode_5_screen_centre =  $6A10
 
         ; Set 0 and 1 to the turn right counter...
         LDA     zp_turn_right_counter
-        STA     L0000
-        STA     L0001
+        STA     zp_boat_left_right_amount 
+        STA     zp_boat_up_down_amount
 
         ; Set the event handler for interval timer crossing 0 
         ; to be the set timer function
-        LDA     #$LO(fn_set_timer_64ms)
+        LDA     #LO(fn_set_timer_64ms)
         STA     eventv_lsb_vector
-        LDA     #$HI(fn_set_timer_64ms DIV 256)
+        LDA     #HI(fn_set_timer_64ms DIV 256)
         STA     eventv_msb_vector
 
 ;L0C57
@@ -409,9 +534,9 @@ mode_5_screen_centre =  $6A10
         STA     zp_screen_start_msb
 
         ; Store the vdu parameter block address in 1B and 1C
-        LDA     #$LO(mode_5_screen_centre)
+        LDA     #LO(mode_5_screen_centre)
         STA     zp_screen_target_lsb
-        LDA     #$HI(mode_5_screen_centre)
+        LDA     #HI(mode_5_screen_centre)
         STA     zp_screen_target_msb
 
         ; Set the statuses that the screen is scrolling
@@ -426,12 +551,12 @@ mode_5_screen_centre =  $6A10
 
         ; TODO SOME LOOP
 .some_loop
-        ; Set A=0
         TXA
-        ; Push A=0 onto stack
         PHA
-        ; No freaking idea yet what that subroutine does
-        ; 1BDB
+        ; Load the additional hazards for this lap in this
+        ; stage - they get progressively harder per stage lap
+        ; There are 13 levels of difficulty per stage 
+        ; where additional objects are added to the map
         JSR     fn_setup_read_lookup_table        
 
         PLA
@@ -466,7 +591,7 @@ mode_5_screen_centre =  $6A10
         JSR     fn_hide_cursor        
 
         ; Initialise graphic buffers
-        JSR     init_graphics_buffers
+        JSR     fn_init_graphics_buffers
 
         ; Load the current stage
         LDA     zp_stage_completed_status
@@ -668,7 +793,7 @@ mode_5_screen_centre =  $6A10
         LDA     zp_boat_speed
         ; Are we at minimum speed of $0A (or higher!), if so branch
         CMP     #$0A
-        BCS     post_delecerate_check
+        BCS     post_decelerate_check
 
         ; If we're beyond minimum speed, every third time around
         ; the loop we'll slow down - means the player has to keep their
@@ -676,7 +801,7 @@ mode_5_screen_centre =  $6A10
         INC     zp_decelerate_counter
         LDA     zp_decelerate_counter
         CMP     #$03
-        BCC     post_delecerate_check
+        BCC     post_decelerate_check
 
         ; Third time around loop, decrease boat speed
         LDA     #$00
@@ -684,7 +809,7 @@ mode_5_screen_centre =  $6A10
         INC     zp_boat_speed
 ;L0D7E
 .post_decelerate_check
-        JSR     L1415
+        JSR     check_if_moving_up_or_down
 
         JSR     L1451
 
@@ -1493,7 +1618,7 @@ mode_5_screen_centre =  $6A10
         ADC     #$08
         ; Update the LSB for the start address
         STA     write_to_screen_address + 1
-        BCC     move_to_next_8 bytes
+        BCC     move_to_next_8_bytes
 
         ; And the carry to the MSB for the start address
         LDA     write_to_screen_address + 2
@@ -1532,7 +1657,7 @@ mode_5_screen_centre =  $6A10
         ; Write the new screen start address MSB back to memory
         STA     write_to_screen_address + 2
 
-.move_to_next_8 bytes
+.move_to_next_8_bytes
         ; Move to the next 8 bytes
         CLC
         LDA     write_to_screen_address + 1
@@ -1736,9 +1861,9 @@ mode_5_screen_centre =  $6A10
         ; Get the target screen address for the get ready
         ; icon and use that as the copy to target
         LDA     zp_screen_target_lsb
-        STA     zp_graphics_screen_or_buffer_lsb
+        STA     zp_graphics_tiles_storage_lsb
         LDA     zp_screen_target_msb
-        STA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_msb
 
         ; Clock is made of 3 chunks
         CLC
@@ -1767,7 +1892,7 @@ mode_5_screen_centre =  $6A10
         ; transparent then skip ahead and replace it
         ; with the source graphic byte (no point EORing it
         ; as it'll have no effect)
-        LDA     (zp_graphics_screen_or_buffer_lsb),Y
+        LDA     (zp_graphics_tiles_storage_lsb),Y
         BEQ     write_get_ready_byte_to_screen
 
         ; Cache the source graphic address
@@ -1779,7 +1904,7 @@ mode_5_screen_centre =  $6A10
         ; EOR the graphic with what's currently on the
         ; screen and stick it back on the stack
         PLA
-        EOR     (zp_graphics_screen_or_buffer_lsb),Y
+        EOR     (zp_graphics_tiles_storage_lsb),Y
         PHA
 
         ; If the graphic that is going to be written to
@@ -1808,8 +1933,8 @@ mode_5_screen_centre =  $6A10
 
         ; Is the graphic the same as what's on the screen
         ; already? If so, branch ahead to write it...
-        AND     (zp_graphics_screen_or_buffer_lsb),Y
-        CMP     (zp_graphics_screen_or_buffer_lsb),Y
+        AND     (zp_graphics_tiles_storage_lsb),Y
+        CMP     (zp_graphics_tiles_storage_lsb),Y
         BEQ     write_get_ready_byte_to_screen
 
         ; TODO different graphic?
@@ -1820,7 +1945,7 @@ mode_5_screen_centre =  $6A10
 .write_get_ready_byte_to_screen
         ; Write the graphic to the screen
         PLA
-        STA     (zp_graphics_screen_or_buffer_lsb),Y
+        STA     (zp_graphics_tiles_storage_lsb),Y
 
 .get_next_get_ready_byte
         ; Copy the next bye of the current chunk
@@ -1830,16 +1955,16 @@ mode_5_screen_centre =  $6A10
         ; Increment the screen target destination
         ; as 8 bytes were just written
         CLC
-        LDA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_graphics_tiles_storage_lsb
         ADC     #$08
-        STA     zp_graphics_screen_or_buffer_lsb
+        STA     zp_graphics_tiles_storage_lsb
         ; If the carry wasn't set, no need to 
         ; do the carry add to the MSB as the carry will be
         ; clear
         BCC     increment_get_ready_buffer
 
         ; Add the carry to the screen target address MSB
-        LDA     zp_graphics_screen_or_buffer_msb
+        LDA     zp_graphics_tiles_storage_msb
         ADC     #$00
 
         ; Check it didn't go beyond $7FFF, if so
@@ -1847,7 +1972,7 @@ mode_5_screen_centre =  $6A10
         JSR     fn_check_screen_start_address
 
         ; Update the screen target address MSB
-        STA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_msb
 
         CLC
 .increment_get_ready_buffer
@@ -1876,10 +2001,10 @@ mode_5_screen_centre =  $6A10
         ; but we just wrote 5 bytes so to get to the 
         ; next row start position use $118
         ; ($140 - ($5 x $8)) = $118
-        LDA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_graphics_tiles_storage_lsb
         ADC     #$18
-        STA     zp_graphics_screen_or_buffer_lsb
-        LDA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_lsb
+        LDA     zp_graphics_tiles_storage_msb
         ADC     #$01
 
         ; Check it hasn't gone over $7FFF
@@ -1888,7 +2013,7 @@ mode_5_screen_centre =  $6A10
 
         CLC
         ; Store the address
-        STA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_msb
         DEC     zp_graphics_chunks_remaining
         BPL     get_get_ready_next_chunk
 
@@ -2065,9 +2190,9 @@ mode_5_screen_centre =  $6A10
         ; Copy the target screen address to our working
         ; variables
         LDA     zp_screen_target_lsb
-        STA     zp_graphics_screen_or_buffer_lsb
+        STA     zp_graphics_tiles_storage_lsb
         LDA     zp_screen_target_msb
-        STA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_msb
 
         ; A boat is made of three graphic "chunks"
         ; of 8 x 5 bytes so it's 120 bytes per boat
@@ -2093,9 +2218,9 @@ mode_5_screen_centre =  $6A10
         BEQ     .black_byte
 
         ; EOR it onto the screen
-        EOR     (zp_graphics_screen_or_buffer_lsb),Y
+        EOR     (zp_graphics_tiles_storage_lsb),Y
         ; Store the EOR'd graphic
-        STA     (zp_graphics_screen_or_buffer_lsb),Y
+        STA     (zp_graphics_tiles_storage_lsb),Y
 .source_black_byte
         ; Get the next byte of the graphic to copy
         DEY
@@ -2104,14 +2229,14 @@ mode_5_screen_centre =  $6A10
         ; Get the next block of 8 bytes of the source graphic
         ; By incrementing the LSB by 8
         CLC
-        LDA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_graphics_tiles_storage_lsb
         ADC     #$08
-        STA     zp_graphics_screen_or_buffer_lsb
+        STA     zp_graphics_tiles_storage_lsb
         ; Carry is clear then no need to increment the MSB
         BCC     source_carry_clear
 
         ; Add the carry to the MSB
-        LDA     zp_graphics_screen_or_buffer_msb
+        LDA     zp_graphics_tiles_storage_msb
         ADC     #$00
         
         ; If we went beyond $80xx for the screen address
@@ -2119,7 +2244,7 @@ mode_5_screen_centre =  $6A10
         JSR     fn_check_screen_start_address
 
         ; Store the updated MSB and clear the carry flag
-        STA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_msb
         CLC
 
 .source_carry_clear
@@ -2141,15 +2266,15 @@ mode_5_screen_centre =  $6A10
         BPL     copy_graphic
 
         ; Increment by $18 / 24
-        LDA     zp_graphics_screen_or_buffer_lsb
+        LDA     zp_graphics_tiles_storage_lsb
         ADC     #$18
-        STA     zp_graphics_screen_or_buffer_lsb
-        LDA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_lsb
+        LDA     zp_graphics_tiles_storage_msb
         ADC     #$01
         JSR     fn_check_screen_start_address
 
         CLC
-        STA     zp_graphics_screen_or_buffer_msb
+        STA     zp_graphics_tiles_storage_msb
         DEC     zp_graphics_chunks_remaining
         BPL     get_next_graphic_chunk
 
@@ -2161,6 +2286,8 @@ mode_5_screen_centre =  $6A10
         ; and turn or accelerate boat
 
         ;  TODO 
+        ; Seems to scroll the screen the right way
+        ; based on the boat's direction
         JSR     L1308
 
         ; Check if the S key has been pressed
@@ -2337,7 +2464,8 @@ accel_key_game = read_accelerate+1
         CLI
         RTS
 
-.L1308
+;L1308
+.fn_calc_boat_direction_of_motion
         ; Use the direction of the boat which
         ; is stored as 0 - 15, to lookup
         ; which function we should call
@@ -2345,6 +2473,10 @@ accel_key_game = read_accelerate+1
         ; it as an offset from the start of the function lookup
         ; table.  Each function address in the table is 2 bytes 
         ; in the table hence having to double the direction.
+
+        ; The calculates how much left or right or up or down
+        ; the boat is going depending on its direction
+        ; and how long it has been facing that way
         LDA     zp_boat_direction
         ASL     A
         TAX
@@ -2353,110 +2485,295 @@ accel_key_game = read_accelerate+1
         INX
         LDA     lookup_table_boat_direction_fns,X
         STA     zp_addr_fn_boat_direction_msb
+
+        ; Call the calculation function
         JMP     (zp_addr_fn_boat_direction_lsb)
 
 ;L131A
 .lookup_table_boat_direction_fns
         ; Function look up table?
-        EQUB    fn_boat_direction_0 MOD 256, fn_boat_direction_0 DIV 256
-        EQUB    fn_boat_direction_1 MOD 256, fn_boat_direction_1 DIV 256
-        EQUB    fn_boat_direction_2 MOD 256, fn_boat_direction_2 DIV 256
-        EQUB    fn_boat_direction_3 MOD 256, fn_boat_direction_3 DIV 256
-        EQUB    fn_boat_direction_4 MOD 256, fn_boat_direction_4 DIV 256
-        EQUB    fn_boat_direction_5 MOD 256, fn_boat_direction_5 DIV 256
-        EQUB    fn_boat_direction_6 MOD 256, fn_boat_direction_6 DIV 256
-        EQUB    fn_boat_direction_7 MOD 256, fn_boat_direction_7 DIV 256
-        EQUB    fn_boat_direction_8 MOD 256, fn_boat_direction_8 DIV 256
-        EQUB    fn_boat_direction_9 MOD 256, fn_boat_direction_9 DIV 256
-        EQUB    fn_boat_direction_10 MOD 256, fn_boat_direction_10 DIV 256
-        EQUB    fn_boat_direction_11 MOD 256, fn_boat_direction_11 DIV 256
-        EQUB    fn_boat_direction_12 MOD 256, fn_boat_direction_12 DIV 256
-        EQUB    fn_boat_direction_13 MOD 256, fn_boat_direction_13 DIV 256
-        EQUB    fn_boat_direction_14 MOD 256, fn_boat_direction_14 DIV 256
-        EQUB    fn_boat_direction_15 MOD 256, fn_boat_direction_15 DIV 256
+        EQUB    LO(fn_boat_direction_N, HI(fn_boat_direction_N)
+        EQUB    LO(fn_boat_direction_NNE), HI(fn_boat_direction_NNE)
+        EQUB    LO(fn_boat_direction_NE), HI(fn_boat_direction_NE)
+        EQUB    LO(fn_boat_direction_ENE), HI(fn_boat_direction_ENE)
+        EQUB    LO(fn_boat_direction_E), HI(fn_boat_direction_E)
+        EQUB    LO(fn_boat_direction_ESE), HI(fn_boat_direction_ESE)
+        EQUB    LO(fn_boat_direction_SE), HI(fn_boat_direction_SE)
+        EQUB    LO(fn_boat_direction_SSE), HI(fn_boat_direction_SSE)
+        EQUB    LO(fn_boat_direction_S), HI(fn_boat_direction_S)
+        EQUB    LO(fn_boat_direction_SSW), HI(fn_boat_direction_SSW)
+        EQUB    LO(fn_boat_direction_SW), HI(fn_boat_direction_SW)
+        EQUB    LO(fn_boat_direction_WSW), HI(fn_boat_direction_WSW)
+        EQUB    LO(fn_boat_direction_W), HI(fn_boat_direction_W)
+        EQUB    LO(fn_boat_direction_NWW), HI(fn_boat_direction_WNW)
+        EQUB    LO(fn_boat_direction_NW), HI(fn_boat_direction_NW)
+        EQUB    LO(fn_boat_direction_NNW), HI(fn_boat_direction_NNW)
 
 ; 133A
-.fn_boat_direction_0
+; All these functions used to determine the amount
+; in a particular direction the boat is facing
+; The first call always works out the zp_boat_left_right_amount
+; The second call always works out the zp_boat_up_down_amount
+
+.fn_boat_direction_N
         ; Boat direction 0 - $133A
         JSR     L13DA
         JMP     L13BA
 
         ; Boat direction 1 - $1340
-.fn_boat_direction_1
+.fn_boat_direction_NNE
         JSR     L13BA
         JMP     L13D2
 
-.fn_boat_direction_2
+.fn_boat_direction_NE
         ; Boat direction 2 - $1346
         JSR     L13BA
         JMP     L13CA
 
-.fn_boat_direction_3
+.fn_boat_direction_ENE
         ; Boat direction 3 - $134C
         JSR     L13C2
         JMP     L13CA
 
-.fn_boat_direction_4
+.fn_boat_direction_E
         ; Boat direction 4 - $1352
         JSR     L13E5
         JMP     L13CA
 
-.fn_boat_direction_5
+.fn_boat_direction_ESE
         ; Boat direction 5 - $1358
         JSR     L13CA
         JMP     L13A2
         
-.fn_boat_direction_6
+.fn_boat_direction_SE
         ; Boat direction 6 - $135E
         JSR     L13CA
         JMP     L139A
 
-.fn_boat_direction_7
+.fn_boat_direction_SSE
         ; Boat direction 7 - $1364
         JSR     L13D2
         JMP     L139A
 
-.fn_boat_direction_8
+.fn_boat_direction_S
         ; Boat direction 8 - $136A
         JSR     L13DA
         JMP     L139A
 
-.fn_boat_direction_9
+.fn_boat_direction_SSW
         ; Boat direction 9 - $1370
         JSR     L13B2
         JMP     L139A
 
-.fn_boat_direction_10
+.fn_boat_direction_SW
         ; Boat direction 10 - $1376
         JSR     L13AA
         JMP     L139A
 
-.fn_boat_direction_11
+.fn_boat_direction_WSW
         ; Boat direction 11 - $137C
         JSR     L13AA
         JMP     L13A2
 
-.fn_boat_direction_12
+.fn_boat_direction_W
         ; Boat direction 12 - $1382
         JSR     L13E5
         JMP     L13AA
 
-.fn_boat_direction_13        
+.fn_boat_direction_WNW
         ; Boat direction 13 - $1388
         JSR     L13AA
         JMP     L13C2
 
-.fn_boat_direction_14
+.fn_boat_direction_NW
         ; Boat direction 14 - $138E
         JSR     L13AA
         JMP     L13BA
 
-.fn_boat_direction_15
+.fn_boat_direction_NNW
         ; Boat direction 15 - $1394
         JSR     L13B2
         JMP     L13BA
        
 ;....
+
+;L13B2
+.boat_was_heading_left
+        ; Boat was heading left and needs to be
+        ; turned right slightly
+        LDA     zp_boat_left_right_amount 
+        JSR     turn_more_right
+        STA     zp_boat_left_right_amount 
+        RTS
+
+;....
+
+;L13D2
+.boat_was_heading_right
+        LDA     zp_boat_left_right_amount 
+        JSR     L140F
+        STA     zp_boat_left_right_amount 
+        RTS
+
+;....
+
+.L13DA
+        ; If the boat was previously moving left or right
+        ; do nothing (4 means neither left or right)
+        ; otherwise branch and check if it heading left or right
+        LDA     zp_boat_left_right_amount 
+        CMP     #$04
+        BNE     check_if_heading_left_or_right
+
+        RTS
+
+;L13E1
+.check_if_heading_left_or_right
+        ; If A is less than 4
+        ; If the boat was turning left
+        BCC     boat_was_heading_left
+
+        ; If A is greater than or equal to 4
+        ; Otheriwse if the Boat is turning right 
+        BCS     boat_was_heading_right     
+
+.turn_more_right
+        ; Turn right slightly by adding 1 
+        ; and making sure the value isn't greater than 6
+        CLC
+        ADC     #$01
+        CMP     #$06
+        BCS     L1403
+
+        RTS           
+
+;....
+.L1403
+        LDA     #$06
+        RTS
+
+.L1406
+        SEC
+        SBC     #$02
+        BMI     L140C
+
+        RTS
+
+.L140C
+        LDA     #$00
+        RTS
+
+
+.L140F
+        LDA     #$02
+        RTS        
+
+
+;L1415
+.check_if_moving_up_or_down
+        ; The zp_boat_up_down_amount flag is set from 0 to 8
+        ; 0 - moving fully up
+        ; ...
+        ; 4 - neither up nor down
+        ; ...
+        ; 8 - moving fully down
+        ;
+        ; If 8 it will move full speed down
+        ; If 6 it will move down every other time through this loop
+        ; If 3,4,5 do nothing
+        ; If 2 it will move up every other time through this loop
+        ; If 1 it will move full speed up
+
+        ; Reset the up and down scrolling status flags
+        LDA     #$00
+        STA     zp_scroll_down_status
+        STA     zp_scroll_up_status
+
+        ; Check to see if the boat is facing down
+        ; If it is then set the scroll down status
+        ; Needs to have a value greater than or equal
+        ; to 7.  
+        LDA     zp_boat_up_down_amount
+        CMP     #$07
+        ; If less than 7 then branch
+        BCC     check_partial_down_direction
+
+        ; Set the scroll down status flag as the boat
+        ; is facing down the screen
+        LDA     #$FF
+        STA     zp_scroll_down_status
+        RTS
+
+;L1426
+.check_partial_down_direction
+        ; Check to see if the boat is facing partially down
+        ; Needs to have a value greater than or equal
+        ; to 6 otherwise it will branch  
+        CMP     #$06
+        ; If less than 6 then branch
+        BCC     L1439
+
+        ; If the boat isn't facing all the way down the screen
+        ; only set scroll down status on every other execution
+        ; of the loop - zp_down_on_this_loop_status will
+        ; only be zero on every other loop
+        INC     zp_down_on_this_loop_status
+        LDA     zp_down_on_this_loop_status
+        AND     #$01
+        STA     zp_down_on_this_loop_status
+        ; If not zero then return
+        BNE     calc_boat_direction_of_motion_return
+
+        ; Set the scroll down status flag as the boat
+        ; is facing partly down the screen
+        LDA     #$FF
+        STA     zp_scroll_down_status        
+
+;L1438
+.calc_boat_direction_of_motion_return
+        RTS
+
+;L1439
+.check_neither_up_nor_down
+        CMP     #$03
+        ; If less than 3 then branch
+        BCC     calc_boat_direction_of_motion_return
+
+        RTS
+
+;L143E
+.check_partial_up_direction
+        CMP     #$02
+        ; If less than 2 then branch (full speed up)
+        BCC     full_up_direction
+
+        ; If the boat isn't facing all the way down the screen
+        ; only set scroll down status on every other execution
+        ; of the loop - zp_down_on_this_loop_status will
+        ; only be zero on every other loop
+        INC     zp_down_on_this_loop_status
+        LDA     zp_down_on_this_loop_status
+        AND     #$01
+        STA     zp_down_on_this_loop_status
+        BNE     calc_boat_direction_of_motion_return
+
+;L144C 
+.full_up_direction
+        ; Boat is scrolling up so set the status flag
+        LDA     #$FF
+        STA     zp_scroll_up_status
+        RTS        
+
+
+
+;....
+
+;L1488
+.set_left_scroll
+        ; Set the left scroll status indicator 
+        LDA     #$FF
+        STA     zp_scroll_left_status
+        RTS
 
 ;L148D
 .fn_colour_cycle_screen
@@ -2970,13 +3287,13 @@ accel_key_game = read_accelerate+1
         ; If some counter variable is zero jump ahead
         ; Seems to be $47 or 71 on first invocation
         LDA     zp_time_remaining_secs
-        BEQ     skip-loop
+        BEQ     skip_loop
 
         ; Decrement counter
         DEC     zp_time_remaining_secs
         JSR     L15F2   
 
-.skip-loop
+.skip_loop
         ; Restore Accumulator, X and Y on the stack
         PLA
         TAY
@@ -3209,7 +3526,7 @@ accel_key_game = read_accelerate+1
         LDY     #$00
         JMP     OSBYTE
 
-.       check_q_key
+.check_q_key
         ; Check to see if the Q key is pressed to turn on sound
         LDX     #$EF
         JSR     fn_read_key
@@ -3778,7 +4095,7 @@ accel_key_game = read_accelerate+1
         JSR     OSWRCH
 
         LDY     #$00
-.
+
 .get_next_enter_name_byte
         ; Read the please enter your name string
         ; and write it to the screen. 
@@ -4181,8 +4498,8 @@ accel_key_game = read_accelerate+1
         RTS
 
 .string_next_stage
-        EQUS    $11,$00,$11,$01,$1F,$02,$10,"Prepare to enter",
-        EQUS    $1F,$03,$12,"the next stage",
+        EQUS    $11,$00,$11,$01,$1F,$02,$10,"Prepare to enter"
+        EQUS    $1F,$03,$12,"the next stage"
         EQUS    $1C,$01,$0A,$12,$08,$11,$03,$11,$82,$0C,$0A,$09
         EQUS    "CONGRATULATIONS!"
 
@@ -4387,7 +4704,7 @@ accel_key_game = read_accelerate+1
 ; Move Memory One off
 ; Currently from 5DC0 ++
 ; ----------------------------------------------------------------------------------------
-
+ORG $5DC0
 	; First time through, var 6 will always
 	; be 0 so will go to L5DD4
 .fn_copy_memory
@@ -4431,14 +4748,13 @@ accel_key_game = read_accelerate+1
 
 
 .start_point
-        LDA     #$16    // Mode command
+        ; Set the mode to MODE 7
+        LDA     #$16    
         JSR     OSWRCH
-
-        LDA     #$07    // set to mode 7
+        LDA     #$07  
         JSR     OSWRCH
 		
 	LDX     #$00
-		
 .get_key_config
 	; Read the key configuration 
 	; from the loader and move it to where
@@ -4552,11 +4868,11 @@ accel_key_game = read_accelerate+1
         LDA     #$00
         STA     copy_to_lsb
         STA     copy_size
-        LDA     #$intro_screen MOD 256
+        LDA     #LO(intro_screen)
         STA     copy_from_lsb
         LDA     #$7C
         STA     copy_to_msb
-        LDA     #intro_screen DIV 256
+        LDA     #HI(intro_screen)
         STA     copy_from_msb
         LDA     #$04
         STA     copy_num_pages
@@ -4755,3 +5071,4 @@ accel_key_game = read_accelerate+1
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
 	
      
+SAVE "jb-new",$1100, $654F

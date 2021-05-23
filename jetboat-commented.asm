@@ -43,6 +43,12 @@ OSBYTE = $FFF4
 ; Interpret the command line given 
 OSCLI = $FFF7
 
+SHEILA_6845_address=$FE00
+SHEILA_6845_data=$FE01
+
+SYS_VIA_INT_REGISTER = $FE4D
+SYS_VIA_INT_ENABLE = $FE4E
+
 VDU_CURRENT_SCREEN_MODE = $0355
 eventv_lsb_vector = $0220
 eventv_msb_vector = $0221
@@ -57,8 +63,8 @@ mode_5_screen_centre =  $6A10
 
 L0019   = $0019
 L001A   = $001A
-zp_down_on_this_loop_status   = $0024
-L0025   = $0025
+zp_north_or_south_on_this_loop_status   = $0024
+zp_east_or_west_on_this_loop_status   = $0025
 L002A   = $002A
 L002B   = $002B
 L002C   = $002C
@@ -75,22 +81,23 @@ L0053   = $0053
 ; Zero page variables
 ; Indicates the direction the boat is facing
 ; and to what degree
-; 0 - going fully left
-; 4 - facing up or down
-; 8 - going fully right 
-zp_boat_left_right_amount = $0000
+; 0 - going fully west
+; 4 - facing fully north or south
+; 8 - going fully east
+zp_boat_east_west_amount = $0000
 
 ; Indicates the direction the boat is facing
 ; and to what degree
-; 0 - going fully up
-; 4 - facing left or right
-; 8 - going fully down
-zp_boat_up_down_amount = $0001
+; 0 - going fully north
+; 4 - facing fully west or east
+; 8 - going fully south
+zp_boat_north_south_amount = $0001
+;
 
 ; 
 zp_boat_direction = $0002
-zp_turn_left_counter = $0003
-zp_turn_right_counter = $0004
+zp_turn_west_counter = $0003
+zp_turn_east_counter = $0004
 zp_boat_speed = $0005
 zp_acceleration_counter = $0006
 zp_decelerate_counter = $0007
@@ -136,10 +143,10 @@ zp_map_pos_y = $0075
 zp_screen_start_div_8_lsb = $0076
 zp_boat_xpos = $0077
 zp_boat_ypos = $0078
-zp_scroll_right_status = $0079
-zp_scroll_left_status = $007A
-zp_scroll_up_status = $007B
-zp_scroll_down_status = $007C
+zp_scroll_east_status = $0079
+zp_scroll_west_status = $007A
+zp_scroll_north_status = $007B
+zp_scroll_south_status = $007C
 zp_screen_start_msb = $007E
 zp_screen_start_lsb = $007D
 
@@ -149,13 +156,28 @@ break_intercept_lsb_vector = $0288
 break_intercept_msb_vector = $0289
 
 
+copy_from_lsb = $0000
+copy_from_msb = $0001
+copy_to_lsb = $0002
+copy_to_msb = $0003
+copy_size = $0004
+copy_num_pages = $0005
+
+left_key_value = $7BC0
+right_key_value = $7BC1
+accel_key_value = $7BC2
+left_key_string_from_loader = $7BD0
+right_key_string_from_loader = $7BE0
+accel_key_string_from_loader = $7BF0
+
+
 ORG $0B40
 
 ;L0B40
 .fn_write_y_tiles_to_off_screen_buffer
         ; Gets a vertical column of tile graphics and
         ; puts them in the off screen buffer (to either)
-        ; scroll left or right - they are not written to the screen
+        ; scroll east or west - they are not written to the screen
         ; here
 
         ; Define the off screen buffer where we'll
@@ -455,15 +477,15 @@ ORG $0B40
 
         ; Initialize variables to zero
         LDA     #$00
-        STA     zp_turn_left_counter
-        STA     zp_turn_right_counter
+        STA     zp_turn_west_counter
+        STA     zp_turn_east_counter
         STA     zp_acceleration_counter
         STA     zp_decelerate_counter
         STA     zp_score_lsb
         STA     zp_score_msb
         STA     L0019
-        STA     zp_down_on_this_loop_status
-        STA     L0025
+        STA     zp_north_or_south_on_this_loop_status
+        STA     zp_east_or_west_on_this_loop_status
         STA     L001A
         STA     zp_checkpoint_status
         STA     zp_aground_colour_cycle_counter
@@ -481,9 +503,9 @@ ORG $0B40
         DEC     zp_time_remaining_secs
 
         ; Set 0 and 1 to the turn right counter...
-        LDA     zp_turn_right_counter
-        STA     zp_boat_left_right_amount 
-        STA     zp_boat_up_down_amount
+        LDA     zp_turn_east_counter
+        STA     zp_boat_east_west_amount 
+        STA     zp_boat_north_south_amount
 
         ; Set the event handler for interval timer crossing 0 
         ; to be the set timer function
@@ -527,9 +549,9 @@ ORG $0B40
         ; Set start of screen address to &5800 for Mode 5
         LDA     #$00
         STA     zp_screen_start_lsb
-        STA     zp_scroll_left_status
-        STA     zp_scroll_down_status
-        STA     zp_scroll_up_status
+        STA     zp_scroll_west_status
+        STA     zp_scroll_south_status
+        STA     zp_scroll_north_status
         LDA     #$58
         STA     zp_screen_start_msb
 
@@ -542,7 +564,7 @@ ORG $0B40
         ; Set the statuses that the screen is scrolling
         ; right and that it's the intro screen
         LDA     #$FF
-        STA     zp_scroll_right_status
+        STA     zp_scroll_east_status
         STA     zp_intro_screen_status
         STA     L002A
 
@@ -642,8 +664,8 @@ ORG $0B40
 
         ; Reset the following sensors
         LDA     #$00
-        STA     zp_scroll_down_status
-        STA     zp_scroll_up_status
+        STA     zp_scroll_south_status
+        STA     zp_scroll_north_status
         STA     zp_score_already_updated_status
 
         ; TODO LOOKING (Big function)
@@ -809,9 +831,9 @@ ORG $0B40
         INC     zp_boat_speed
 ;L0D7E
 .post_decelerate_check
-        JSR     check_if_moving_up_or_down
+        JSR     fn_check_if_moving_north_or_south
 
-        JSR     L1451
+        JSR     fn_check_if_moving_east_or_west
 
         JSR     fn_scroll_screen_and_update
 
@@ -846,14 +868,14 @@ ORG $0B40
         ; Check to see if either scroll up 
         ; or down has been set (ignore if neither
         ; or both). Neat way to check.
-        LDA     zp_scroll_down_status
-        EOR     zp_scroll_up_status
+        LDA     zp_scroll_south_status
+        EOR     zp_scroll_north_status
         BEQ     check_left_right_status
 
         ; Check to see if a scroll up is happening
         ; (will be set to $FF so negative) if not,
         ; branch ahead
-        BIT     zp_scroll_up_status
+        BIT     zp_scroll_north_status
         BPL     check_down_status
 
         ; Move the boat position up the screen
@@ -898,7 +920,7 @@ ORG $0B40
 
 .check_down_status
         ; Check to see if a scroll down should happen
-        BIT     zp_scroll_down_status
+        BIT     zp_scroll_south_status
         ; Branch if not
         BPL     check_left_right_status
 
@@ -966,13 +988,13 @@ ORG $0B40
 .check_left_right_status
         ; Check to see if a scroll left or right is happening
         ; If both, it will be ignored
-        LDA     zp_scroll_right_status
-        EOR     zp_scroll_left_status
+        LDA     zp_scroll_east_status
+        EOR     zp_scroll_west_status
         ; If not, branch ahead
         BEQ     scroll_checks_complete
 
         ; Check to see if it's a scroll right
-        BIT     zp_scroll_right_status
+        BIT     zp_scroll_east_status
         ; If it isn't branch ahead
         BPL     check_left_status
 
@@ -998,14 +1020,14 @@ ORG $0B40
         CLC
         LDA     zp_screen_start_lsb
         ADC     #$40
-        STA     copy_graphics_target + 1
+        STA     copy_graphics_column_target + 1
         LDA     zp_screen_start_msb
         ADC     #$01
         ; Check the start address gone beyond $8000
         ; and correct it if it did - only important
         ; for the MSB not the LSB
         JSR     fn_check_screen_start_address
-        STA     copy_graphics_target + 2
+        STA     copy_graphics_column_target + 2
 
         ; Move the screen left by 4 pixels / one byte
         ; and update our screen address tracking variables
@@ -1037,7 +1059,7 @@ ORG $0B40
 
 .check_left_status
         ; Check to see if it's a scroll left
-        BIT     zp_scroll_left_status
+        BIT     zp_scroll_west_status
         BPL     scroll_checks_complete
 
         DEC     zp_boat_xpos
@@ -1054,14 +1076,14 @@ ORG $0B40
         SEC
         SBC     #$08
         STA     zp_screen_start_lsb
-        STA     copy_graphics_target + 1
+        STA     copy_graphics_column_target + 1
         LDA     zp_screen_start_msb
         SBC     #$00
         ; Check the start address gone bel0w $5800
         ; and correct it if it did        
         JSR     fn_check_screen_start_address
         STA     zp_screen_start_msb
-        STA     copy_graphics_target + 2
+        STA     copy_graphics_column_target + 2
 
         LDA     zp_boat_ypos
         STA     zp_map_pos_y
@@ -1069,7 +1091,7 @@ ORG $0B40
         STA     zp_map_pos_x
         JSR     fn_write_y_tiles_to_off_screen_buffer  
 
-.L0E85
+;0E85
 .scroll_checks_complete
         JSR     fn_scroll_screen_up
 
@@ -1082,8 +1104,8 @@ ORG $0B40
 
         ; Check to see if the screen should be scrolled up or down
         ; if not, branch ahead.s
-        LDA     zp_scroll_down_status
-        EOR     zp_scroll_up_status
+        LDA     zp_scroll_south_status
+        EOR     zp_scroll_north_status
         BEQ     skip_row_to_screen_copy
 
         ; Needs to be scrolled so copy a new row of data to the 
@@ -1093,16 +1115,14 @@ ORG $0B40
 .skip_row_to_screen_copy
         ; Check to see if the screen should be scrolled right or 
         ; left, if not branch ahead
-        LDA     zp_scroll_right_status
-        EOR     zp_scroll_left_status
+        LDA     zp_scroll_east_status
+        EOR     zp_scroll_west_status
         BEQ     skip_column_to_screen_copy
 
         ; Copy the column of tiles to the screen
         JSR     fn_copy_tile_column_to_screen  
 
 .skip_column_to_screen_copy
-
-;gets called 41 times on screen load
         ; Check that the intro screen is not being shown, if it 
         ; is branch ahead
         LDA     zp_intro_screen_status
@@ -1163,16 +1183,16 @@ ORG $0B40
         ; and give the MSB of the screen start
         ; address divided by 8
         LDX     #$0C
-        STX     LFE00
-        STA     LFE01
+        STX     SHEILA_6845_address
+        STA     SHEILA_6845_data
 
         ; Set 6845 Register to 13
         ; and give the LSB of the screen start
         ; address divided by 8
         INX
-        STX     LFE00
+        STX     SHEILA_6845_address
         LDA     zp_screen_start_div_8_lsb
-        STA     LFE01
+        STA     SHEILA_6845_data
         RTS
 
 ;L0EDC
@@ -1234,7 +1254,7 @@ ORG $0B40
         ; been copied
         STA     dummy_screen_start,Y
         DEY
-        BPL     copy_graphics_column_8_bytes
+        BPL     loop_copy_graphics_column_8_bytes
 
 ;L0F03
         ; Load the LSB for the screen write address
@@ -1374,9 +1394,9 @@ ORG $0B40
         BNE     byte_copy_tile_row_to_screen
 
         ; if A>=M then branch
-        LDA     byte_copy_graphics_row_target + 1
+        LDA     copy_graphics_row_target + 1
         CMP     #$AA
-        BCS     copy_tile_row_to_screen
+        BCS     byte_copy_tile_row_to_screen
 
 ;L0F6B
 .bulk_copy_tile_row_to_screen
@@ -1448,22 +1468,22 @@ ORG $0B40
         ; taking 4 bytes per iteration of the loop
 
         ; Copy block one
-        LDA     L0600,X
+        LDA     $0600,X
 .screen_target_block_one
         STA     dummy_screen_start,X
 
         ; Copy block two
-        LDA     L0650,X
+        LDA     $0650,X
 .screen_target_block_two
         STA     dummy_screen_start,X
 
         ; Copy block three
-        LDA     L06A0,X
+        LDA     $06A0,X
 .screen_target_block_three
         STA     dummy_screen_start,X
 
         ; Copy block four
-        LDA     L06F0,X
+        LDA     $06F0,X
 .screen_target_block_four
         STA     dummy_screen_start,X
         DEX
@@ -2026,12 +2046,12 @@ ORG $0B40
         ; If left and right scroll directions are both
         ; detected then branch away, otherwise,
         ; check individually for left and right
-        LDA     zp_scroll_right_status
-        AND     zp_scroll_left_status
+        LDA     zp_scroll_east_status
+        AND     zp_scroll_west_status
         BNE     check_scroll_vertical
 
         ; Check for scroll right
-        BIT     zp_scroll_right_status
+        BIT     zp_scroll_east_status
         BPL     check_scroll_left
 
         ; Add 8 bytes to the screen start address
@@ -2053,7 +2073,7 @@ ORG $0B40
 
 .check_scroll_left
         ; Check for scroll left
-        BIT     zp_scroll_left_status
+        BIT     zp_scroll_west_status
         BPL     check_scroll_vertical
 
         ; Subtract 8 bytes to the screen start address
@@ -2075,12 +2095,12 @@ ORG $0B40
 .check_scroll_vertical
         ; If both scroll up and down are set then
         ; branch (do nothing)
-        LDA     zp_scroll_down_status
-        AND     zp_scroll_up_status
+        LDA     zp_scroll_south_status
+        AND     zp_scroll_north_status
         BNE     set_boat_rotation_graphic
 
         ; Check for scroll up (top of screen)
-        BIT     zp_scroll_up_status
+        BIT     zp_scroll_north_status
         BPL     check_scroll_down
 
         ; Subtract $140 bytes to the screen start address
@@ -2099,7 +2119,7 @@ ORG $0B40
 
 .check_scroll_down
         ; Scroll for scroll down (bottom of screen)
-        BIT     zp_scroll_down_status
+        BIT     zp_scroll_south_status
         BPL     set_boat_rotation_graphic
 
         ; Add $140 bytes to the screen start address
@@ -2215,7 +2235,7 @@ ORG $0B40
         ; If it's a black byte then no point in XORing
         ; it
         LDA     (zp_general_purpose_lsb),Y
-        BEQ     .black_byte
+        BEQ     source_black_byte
 
         ; EOR it onto the screen
         EOR     (zp_graphics_tiles_storage_lsb),Y
@@ -2288,7 +2308,7 @@ ORG $0B40
         ;  TODO 
         ; Seems to scroll the screen the right way
         ; based on the boat's direction
-        JSR     L1308
+        JSR     fn_calc_boat_direction_of_motion
 
         ; Check if the S key has been pressed
         ; and turn the sound on if it was
@@ -2335,8 +2355,8 @@ left_key_game = read_left_key+1
         ; Detects left key press 6 times in a row
         ; before doing anything - so we don't turn too
         ; fast
-        INC     zp_turn_left_counter
-        LDA     zp_turn_left_counter
+        INC     zp_turn_west_counter
+        LDA     zp_turn_west_counter
 
         ; If the we haven't detected left 6 times
         ; do nothing (branch ahead)        
@@ -2345,7 +2365,7 @@ left_key_game = read_left_key+1
 
         ; Reset the left key detection 
         LDA     #$00
-        STA     zp_turn_left_counter
+        STA     zp_turn_west_counter
 
         ; Increment the left counter
         LDA     zp_boat_direction
@@ -2383,8 +2403,8 @@ right_key_game = read_right_key+1
         ; Detects right key press 6 times in a row
         ; before doing anything - so we don't turn too
         ; fast
-        INC     zp_turn_right_counter
-        LDA     zp_turn_right_counter
+        INC     zp_turn_east_counter
+        LDA     zp_turn_east_counter
 
         ; If the we haven't detected right 6 times
         ; do nothing (branch ahead)            
@@ -2393,7 +2413,7 @@ right_key_game = read_right_key+1
 
         ; Reset the right key detection 
         LDA     #$00
-        STA     zp_turn_right_counter
+        STA     zp_turn_east_counter
 
         ; Maximum value is 16 (assume rotation by 360/16 = 27)
         ; as it's a 4-bit counter. Effectively decrements
@@ -2492,7 +2512,7 @@ accel_key_game = read_accelerate+1
 ;L131A
 .lookup_table_boat_direction_fns
         ; Function look up table?
-        EQUB    LO(fn_boat_direction_N, HI(fn_boat_direction_N)
+        EQUB    LO(fn_boat_direction_N), HI(fn_boat_direction_N)
         EQUB    LO(fn_boat_direction_NNE), HI(fn_boat_direction_NNE)
         EQUB    LO(fn_boat_direction_NE), HI(fn_boat_direction_NE)
         EQUB    LO(fn_boat_direction_ENE), HI(fn_boat_direction_ENE)
@@ -2505,173 +2525,268 @@ accel_key_game = read_accelerate+1
         EQUB    LO(fn_boat_direction_SW), HI(fn_boat_direction_SW)
         EQUB    LO(fn_boat_direction_WSW), HI(fn_boat_direction_WSW)
         EQUB    LO(fn_boat_direction_W), HI(fn_boat_direction_W)
-        EQUB    LO(fn_boat_direction_NWW), HI(fn_boat_direction_WNW)
+        EQUB    LO(fn_boat_direction_WNW), HI(fn_boat_direction_WNW)
         EQUB    LO(fn_boat_direction_NW), HI(fn_boat_direction_NW)
         EQUB    LO(fn_boat_direction_NNW), HI(fn_boat_direction_NNW)
 
 ; 133A
 ; All these functions used to determine the amount
-; in a particular direction the boat is facing
-; The first call always works out the zp_boat_left_right_amount
-; The second call always works out the zp_boat_up_down_amount
+; in a particular direction the boat is moving
 
 .fn_boat_direction_N
         ; Boat direction 0 - $133A
-        JSR     L13DA
-        JMP     L13BA
+        JSR     fn_adjust_east_west_for_full_north_or_south
+        JMP     fn_accelerate_north
 
         ; Boat direction 1 - $1340
 .fn_boat_direction_NNE
-        JSR     L13BA
-        JMP     L13D2
+        JSR     fn_accelerate_north
+        JMP     fn_move_to_half_west
 
 .fn_boat_direction_NE
         ; Boat direction 2 - $1346
-        JSR     L13BA
-        JMP     L13CA
+        JSR     fn_accelerate_north
+        JMP     fn_accelerate_west
 
 .fn_boat_direction_ENE
         ; Boat direction 3 - $134C
-        JSR     L13C2
-        JMP     L13CA
+        JSR     fn_move_to_half_north
+        JMP     fn_accelerate_west
 
 .fn_boat_direction_E
         ; Boat direction 4 - $1352
-        JSR     L13E5
-        JMP     L13CA
+        JSR     fn_adjust_north_south_for_full_east_or_west
+        JMP     fn_accelerate_west
 
 .fn_boat_direction_ESE
         ; Boat direction 5 - $1358
-        JSR     L13CA
-        JMP     L13A2
+        JSR     fn_accelerate_west
+        JMP     fn_move_to_half_south
         
 .fn_boat_direction_SE
         ; Boat direction 6 - $135E
-        JSR     L13CA
-        JMP     L139A
+        JSR     fn_accelerate_west
+        JMP     fn_accelerate_south
 
 .fn_boat_direction_SSE
         ; Boat direction 7 - $1364
-        JSR     L13D2
-        JMP     L139A
+        JSR     fn_move_to_half_west
+        JMP     fn_accelerate_south
 
 .fn_boat_direction_S
         ; Boat direction 8 - $136A
-        JSR     L13DA
-        JMP     L139A
+        JSR     fn_adjust_east_west_for_full_north_or_south
+        JMP     fn_accelerate_south
 
 .fn_boat_direction_SSW
         ; Boat direction 9 - $1370
-        JSR     L13B2
-        JMP     L139A
+        JSR     fn_move_to_half_east
+        JMP     fn_accelerate_south
 
 .fn_boat_direction_SW
         ; Boat direction 10 - $1376
-        JSR     L13AA
-        JMP     L139A
+        JSR     fn_accelerate_east
+        JMP     fn_accelerate_south
 
 .fn_boat_direction_WSW
         ; Boat direction 11 - $137C
-        JSR     L13AA
-        JMP     L13A2
+        JSR     fn_accelerate_east
+        JMP     fn_move_to_half_south
 
 .fn_boat_direction_W
         ; Boat direction 12 - $1382
-        JSR     L13E5
-        JMP     L13AA
+        JSR     fn_adjust_north_south_for_full_east_or_west
+        JMP     fn_accelerate_east
 
 .fn_boat_direction_WNW
         ; Boat direction 13 - $1388
-        JSR     L13AA
-        JMP     L13C2
+        JSR     fn_accelerate_east
+        JMP     fn_move_to_half_north
 
 .fn_boat_direction_NW
         ; Boat direction 14 - $138E
-        JSR     L13AA
-        JMP     L13BA
+        JSR     fn_accelerate_east
+        JMP     fn_accelerate_north
 
 .fn_boat_direction_NNW
         ; Boat direction 15 - $1394
-        JSR     L13B2
-        JMP     L13BA
+        JSR     fn_move_to_half_east
+        JMP     fn_accelerate_north
        
 ;....
 
-;L13B2
-.boat_was_heading_left
-        ; Boat was heading left and needs to be
-        ; turned right slightly
-        LDA     zp_boat_left_right_amount 
-        JSR     turn_more_right
-        STA     zp_boat_left_right_amount 
+;L139A
+.fn_accelerate_south
+        LDA     zp_boat_north_south_amount
+        JSR     accelerate_south_or_east_by_2
+        STA     zp_boat_north_south_amount
         RTS
 
-;....
+;L13A2
+.fn_move_to_half_south
+        ; Accelerate south can be all the way
+        ; to full speed (8)
+        LDA     zp_boat_north_south_amount
+        JSR     move_to_half_east_or_south
+        STA     zp_boat_north_south_amount
+        RTS
+
+;L13AA
+.fn_accelerate_east
+        ; Accelerates North (full speed when 
+        ; zp_boat_north_south_amount is 0)
+        LDA     zp_boat_east_west_amount
+        JSR     accelerate_south_or_east_by_2
+        STA     zp_boat_east_west_amount
+        RTS
+
+;L13B2
+.fn_move_to_half_east
+        ; Accelerate east but only to max
+        ; of half speed (6)
+        LDA     zp_boat_east_west_amount 
+        JSR     move_to_half_east_or_south
+        STA     zp_boat_east_west_amount 
+        RTS
+
+;L13BA
+.fn_accelerate_north
+        ; Accelerates North (full speed when 
+        ; zp_boat_north_south_amount is 0)
+        LDA     zp_boat_north_south_amount
+        JSR     accelerate_north_or_west_by_2
+        STA     zp_boat_north_south_amount
+        RTS
+
+;L13C2
+.fn_move_to_half_north
+        LDA     zp_boat_north_south_amount
+        JSR     set_to_half_west_or_half_north
+        STA     zp_boat_north_south_amount
+        RTS
+
+;L13CA
+.fn_accelerate_west
+        LDA     zp_boat_east_west_amount
+        JSR     accelerate_north_or_west_by_2
+        STA     zp_boat_east_west_amount
+        RTS
 
 ;L13D2
-.boat_was_heading_right
-        LDA     zp_boat_left_right_amount 
-        JSR     L140F
-        STA     zp_boat_left_right_amount 
+.fn_move_to_half_west
+        ; Sets the east/west amount to 2 
+        ; (half west)
+        LDA     zp_boat_east_west_amount 
+        JSR     set_to_half_west_or_half_north
+        STA     zp_boat_east_west_amount 
         RTS
 
-;....
-
-.L13DA
+;L13DA
+.fn_adjust_east_west_for_full_north_or_south
         ; If the boat was previously moving left or right
         ; do nothing (4 means neither left or right)
-        ; otherwise branch and check if it heading left or right
-        LDA     zp_boat_left_right_amount 
+        ; otherwise branch and adjust towards no left / right
+        LDA     zp_boat_east_west_amount 
         CMP     #$04
-        BNE     check_if_heading_left_or_right
+        BNE     check_if_heading_east_or_west
 
         RTS
 
 ;L13E1
-.check_if_heading_left_or_right
+.check_if_heading_east_or_west
         ; If A is less than 4
         ; If the boat was turning left
-        BCC     boat_was_heading_left
+        BCC     fn_move_to_half_east
 
         ; If A is greater than or equal to 4
         ; Otheriwse if the Boat is turning right 
-        BCS     boat_was_heading_right     
+        BCS     fn_move_to_half_west    
 
-.turn_more_right
+;L13E5
+.fn_adjust_north_south_for_full_east_or_west
+        ; If the boat was previously moving east or west
+        ; do nothing (4 means neither east or west)
+        ; otherwise branch and adjust towards east/west
+
+        LDA     zp_boat_north_south_amount
+        CMP     #$04
+        BNE     check_if_heading_north_or_south
+
+        RTS
+
+;L13EC
+.check_if_heading_north_or_south
+        ; Carry not set so it was moving South
+        BCC     fn_move_to_half_south
+
+        ; Carry not set so it was moving North
+        BCS     fn_move_to_half_north
+
+;L13F0
+.accelerate_south_or_east_by_2
+        ; Changes the speed by +2 
+        ; For up down, that 0-3 is Up, 4 neither, 5-8 Down
+        ; For left right, 0-3 is Left, 4 neither, 5-8 right
+        CLC
+        ADC     #$02
+        CMP     #$08
+        BCS     reset_to_max_if_greater
+
+        RTS
+
+;L13F8
+.reset_to_max_if_greater
+        ; If greater than the max of 8 reset to 8
+        LDA     #$08
+        RTS
+
+
+;13FB
+.move_to_half_east_or_south
         ; Turn right slightly by adding 1 
         ; and making sure the value isn't greater than 6
         CLC
         ADC     #$01
         CMP     #$06
-        BCS     L1403
+        BCS     set_to_half_east_or_half_north
 
         RTS           
 
-;....
-.L1403
+;L1403
+.set_to_half_east_or_half_north
         LDA     #$06
         RTS
 
-.L1406
+;L1406
+.accelerate_north_or_west_by_2
+        ; Changes the speed by -2 
+        ; For up down, that 0-3 is Up, 4 neither, 5-8 Down
+        ; For left right, 0-3 is Left, 4 neither, 5-8 right
         SEC
         SBC     #$02
-        BMI     L140C
+        BMI     reset_to_zero_if_negative
 
         RTS
 
-.L140C
+;L140C
+.reset_to_zero_if_negative
+        ; If negative, rest to zero
         LDA     #$00
         RTS
 
+;L140F
+.set_to_half_west_or_half_north
+        ; Max North or West is 0, neutal is 4
+        LDA     #$02
+        RTS      
 
-.L140F
+; BUG?!?! Never called and inaccessible
         LDA     #$02
         RTS        
 
-
 ;L1415
-.check_if_moving_up_or_down
-        ; The zp_boat_up_down_amount flag is set from 0 to 8
+.fn_check_if_moving_north_or_south
+        ; The zp_boat_north_south_amount flag is set from 0 to 8
         ; 0 - moving fully up
         ; ...
         ; 4 - neither up nor down
@@ -2686,93 +2801,179 @@ accel_key_game = read_accelerate+1
 
         ; Reset the up and down scrolling status flags
         LDA     #$00
-        STA     zp_scroll_down_status
-        STA     zp_scroll_up_status
+        STA     zp_scroll_south_status
+        STA     zp_scroll_north_status
 
         ; Check to see if the boat is facing down
         ; If it is then set the scroll down status
         ; Needs to have a value greater than or equal
         ; to 7.  
-        LDA     zp_boat_up_down_amount
+        LDA     zp_boat_north_south_amount
         CMP     #$07
         ; If less than 7 then branch
-        BCC     check_partial_down_direction
+        BCC     check_partial_south_direction
 
         ; Set the scroll down status flag as the boat
         ; is facing down the screen
         LDA     #$FF
-        STA     zp_scroll_down_status
+        STA     zp_scroll_south_status
         RTS
 
 ;L1426
-.check_partial_down_direction
+.check_partial_south_direction
         ; Check to see if the boat is facing partially down
         ; Needs to have a value greater than or equal
         ; to 6 otherwise it will branch  
         CMP     #$06
         ; If less than 6 then branch
-        BCC     L1439
+        BCC     check_neither_north_nor_south
 
         ; If the boat isn't facing all the way down the screen
         ; only set scroll down status on every other execution
-        ; of the loop - zp_down_on_this_loop_status will
+        ; of the loop - zp_north_or_south_on_this_loop_status will
         ; only be zero on every other loop
-        INC     zp_down_on_this_loop_status
-        LDA     zp_down_on_this_loop_status
+        INC     zp_north_or_south_on_this_loop_status
+        LDA     zp_north_or_south_on_this_loop_status
         AND     #$01
-        STA     zp_down_on_this_loop_status
+        STA     zp_north_or_south_on_this_loop_status
         ; If not zero then return
-        BNE     calc_boat_direction_of_motion_return
+        BNE     calc_north_south_boat_direction_of_motion_return
 
         ; Set the scroll down status flag as the boat
         ; is facing partly down the screen
         LDA     #$FF
-        STA     zp_scroll_down_status        
+        STA     zp_scroll_south_status        
 
 ;L1438
-.calc_boat_direction_of_motion_return
+.calc_north_south_boat_direction_of_motion_return
         RTS
 
 ;L1439
-.check_neither_up_nor_down
+.check_neither_north_nor_south
+        ; Check to see if it's 3,4,5 (given previous checks)
+        ; if so do nothing otherwise branch
         CMP     #$03
-        ; If less than 3 then branch
-        BCC     calc_boat_direction_of_motion_return
+        ; If less than 3 then branch as boat is heading up
+        BCC     check_partial_north_direction
 
         RTS
 
 ;L143E
-.check_partial_up_direction
+.check_partial_north_direction
         CMP     #$02
         ; If less than 2 then branch (full speed up)
-        BCC     full_up_direction
+        BCC     full_north_direction
 
         ; If the boat isn't facing all the way down the screen
         ; only set scroll down status on every other execution
-        ; of the loop - zp_down_on_this_loop_status will
+        ; of the loop - zp_north_or_south_on_this_loop_status will
         ; only be zero on every other loop
-        INC     zp_down_on_this_loop_status
-        LDA     zp_down_on_this_loop_status
+        INC     zp_north_or_south_on_this_loop_status
+        LDA     zp_north_or_south_on_this_loop_status
         AND     #$01
-        STA     zp_down_on_this_loop_status
-        BNE     calc_boat_direction_of_motion_return
+        STA     zp_north_or_south_on_this_loop_status
+        BNE     calc_north_south_boat_direction_of_motion_return
 
 ;L144C 
-.full_up_direction
+.full_north_direction
         ; Boat is scrolling up so set the status flag
         LDA     #$FF
-        STA     zp_scroll_up_status
+        STA     zp_scroll_north_status
         RTS        
 
+;L1451
+.fn_check_if_moving_east_or_west
+        ; The zp_boat_east_west_amount flag is set from 0 to 8
+        ; 0 - moving fully left
+        ; ...
+        ; 4 - neither left nor right
+        ; ...
+        ; 8 - moving fully right
+        ;
+        ; If 8 it will move full speed right
+        ; If 6 it will move right every other time through this loop
+        ; If 3,4,5 do nothing
+        ; If 2 it will move left every other time through this loop
+        ; If 1 it will move full speed left
 
+        ; Reset the left and right scrolling status flags
+        LDA     #$00
+        STA     zp_scroll_east_status
+        STA     zp_scroll_west_status
 
-;....
+        ; Check to see if the boat is facing right
+        ; If it is then set the scroll rgith status
+        ; Needs to have a value greater than or equal
+        ; to 7.  
+        LDA     zp_boat_east_west_amount
+        CMP     #$07
+        ; If less than 7 then branch
+        BCC     check_partial_east_direction
+
+        ; Set the scroll right status flag as the boat
+        ; is facing right
+        LDA     #$FF
+        STA     zp_scroll_east_status
+        RTS
+
+;L1462
+.check_partial_east_direction
+        ; Check to see if the boat is facing partially right
+        ; Needs to have a value greater than or equal
+        ; to 6 otherwise it will branch  
+        CMP     #$06
+        BCC     check_neither_east_nor_west
+
+        ; If the boat isn't facing all the way left
+        ; only set scroll status on every other execution
+        ; of the loop - zp_east_or_west_on_this_loop_status will
+        ; only be zero on every other loop
+        INC     zp_east_or_west_on_this_loop_status
+        LDA     zp_east_or_west_on_this_loop_status
+        AND     #$01
+        STA     zp_east_or_west_on_this_loop_status
+        ; If not zero then return
+        BNE     calc_east_west_boat_direction_of_motion_return
+
+        ; Set the scroll right status flag as the boat
+        ; is facing partly right
+        LDA     #$FF
+        STA     zp_scroll_east_status
+;L1474
+.calc_east_west_boat_direction_of_motion_return
+        RTS
+
+;L1475
+.check_neither_east_nor_west
+        ; Check to see if it's 3,4,5 (given previous checks)
+        ; if so do nothing otherwise branch
+        CMP     #$03
+        ; If less than 3 then branch as boat is heading left
+        BCC     check_partial_west_direction
+
+        RTS
+
+;L147A
+.check_partial_west_direction
+        CMP     #$02
+        ; If less than 2 then branch (full speed up)
+        BCC     full_left_direction
+
+        ; If the boat isn't facing all the way left 
+        ; only set scroll left status on every other execution
+        ; of the loop - zp_north_or_south_on_this_loop_status will
+        ; only be zero on every other loop
+        INC     zp_east_or_west_on_this_loop_status
+        LDA     zp_east_or_west_on_this_loop_status
+        AND     #$01
+        STA     zp_east_or_west_on_this_loop_status
+        BNE     calc_east_west_boat_direction_of_motion_return
 
 ;L1488
-.set_left_scroll
-        ; Set the left scroll status indicator 
+.full_left_direction
+        ; Boat is scrolling left so set the status flag
         LDA     #$FF
-        STA     zp_scroll_left_status
+        STA     zp_scroll_west_status
         RTS
 
 ;L148D
@@ -2906,8 +3107,8 @@ accel_key_game = read_accelerate+1
         LDA     #$00
         LDY     #$9F
 .clear_graphics_buffer_loop
-        STA     L0A00,Y
-        STA     L0AA0,Y
+        STA     $0A00,Y
+        STA     $0AA0,Y
         DEY
         CPY     #$FF
         BNE     clear_graphics_buffer_loop
@@ -2916,11 +3117,11 @@ accel_key_game = read_accelerate+1
         LDY     #$1F
 .buffer_time_and_lap_loop
         ; Copy the TIME icon to the graphics buffer
-        LDA     L0568,Y
-        STA     L0A08,Y
+        LDA     $0568,Y
+        STA     $0A08,Y
         ; Copy the LAP icon to the graphics buffer
-        LDA     L0588,Y
-        STA     L0AF8,Y
+        LDA     $0588,Y
+        STA     $0AF8,Y
         DEY
         BPL     buffer_time_and_lap_loop
 
@@ -2928,8 +3129,8 @@ accel_key_game = read_accelerate+1
         LDY     #$27
 .buffer_score_loop
         ; Copy the SCORE icon to the graphics buffer
-        LDA     L0540,Y
-        STA     L0A68,Y
+        LDA     $0540,Y
+        STA     $0A68,Y
         DEY
         BPL     buffer_score_loop
 
@@ -2939,10 +3140,10 @@ accel_key_game = read_accelerate+1
         ; TODO Maybe a hangover from the prototype?
         ; Or a graphics workspace
         ; Just blank areas on load
-        LDA     L05A8,Y
-        STA     L0A48,Y
-        STA     L0AE0,Y
-        STA     L0B38,Y
+        LDA     $05A8,Y
+        STA     $0A48,Y
+        STA     $0AE0,Y
+        STA     $0B38,Y
 
         DEY
         BPL     buffer_blanks_loop
@@ -3291,7 +3492,7 @@ accel_key_game = read_accelerate+1
 
         ; Decrement counter
         DEC     zp_time_remaining_secs
-        JSR     L15F2   
+        JSR     fn_draw_time_counter
 
 .skip_loop
         ; Restore Accumulator, X and Y on the stack
@@ -3588,7 +3789,7 @@ accel_key_game = read_accelerate+1
         ; TODO - Some state flag for the main loop?
         LDA     #$05
         ; TODO - Main game loop?
-        JSR     L1603
+        JSR     fn_set_timer_64ms
 
 .check_freeze_keys_end
         RTS
@@ -3620,9 +3821,9 @@ accel_key_game = read_accelerate+1
         LDX     #$00
 
 .completed_lap_next_sound
-        LDA     L1750,X
+        LDA     pitch_table_completed_lap,X
         STA     .sound_completed_lap_pitch
-        LDA     L1755,X
+        LDA     duration_table_completed_lap,X
         STA     .sound_completed_lap_duration
 
         ; Preserve the X index value
@@ -3701,8 +3902,8 @@ accel_key_game = read_accelerate+1
         ;   1 - Flush the channel and play this sound immediately
         ;   0 - Play on channel 0
         LDX     zp_boat_speed
-        LDA     duration_lookup_sound_x2,X
-        STA     sound_x2_duration + 1
+        LDA     duration_lookup_sound_table,X
+        STA     sound_boat_move_second_pitch
         LDX     #sound_boat_move_second MOD 256
         LDY     #sound_boat_move_second DIV 256
         LDA     #$07
@@ -4117,9 +4318,9 @@ accel_key_game = read_accelerate+1
         ; Look up where the name is in memory
         ; As we're going to overwrite it
         LDA     high_score_name_lsb,X
-        STA     L191A
+        STA     read_high_score_name_params_lsb
         LDA     high_score_name_msb,X
-        STA     L191B
+        STA     read_high_score_name_params_msb
 
         ; OSBYTE $1F
         ; Move text cursor to
@@ -4175,6 +4376,7 @@ accel_key_game = read_accelerate+1
         JMP     OSWRCH
 
 .read_high_score_name_params
+.read_high_score_name_params_lsb
         ; Parameter block for OSWORD &00 call
         ; to read user's name for high score table
         ; read_high_score_name_params_lsb
@@ -4266,7 +4468,7 @@ accel_key_game = read_accelerate+1
         LDA     #$20
 .write_space_to_screen
         ; Write to the bottom line of the screen        
-        STA     L7FC0,X
+        STA     $7FC0,X
         INX
         ; Have we written 40 spaces?
         CPX     #$28
@@ -4274,9 +4476,9 @@ accel_key_game = read_accelerate+1
         BNE     write_space_to_screen
 
         LDA     #$81
-        STA     L7FC0
+        STA     $7FC0
         LDA     #$9D
-        STA     L7FC1
+        STA     $7FC1
 
         ; OSBYTE $1F
         ; In MODE 7 - move text cursor to
@@ -4323,7 +4525,7 @@ accel_key_game = read_accelerate+1
         CPX     #$00
 
         ; It wasn't so loop again waiting for input
-        BEQ     first_routine
+        BEQ     fn_wait_for_intro_input
 
 .end_fn_wait_for_intro_input
         RTS
@@ -4763,7 +4965,7 @@ ORG $5DC0
 	; plus a new line (&0D)
         LDA     left_key_string_from_loader,X
         CMP     #$0D
-        BEQ     init_vars
+        BEQ     copy_to_0400
 
         STA     left_key_string_game,X
         LDA     right_key_string_from_loader,X
@@ -4790,7 +4992,7 @@ ORG $5DC0
         STA     copy_to_msb
         LDA     #$A0
         STA     copy_size
-        JSR     L5DC0
+        JSR     fn_copy_memory
 		
 .copy_to_0540
         ; Copys the Score, Time, Lap Graphics

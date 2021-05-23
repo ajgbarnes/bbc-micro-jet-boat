@@ -2494,7 +2494,7 @@ accel_key_game = read_accelerate+1
         ; table.  Each function address in the table is 2 bytes 
         ; in the table hence having to double the direction.
 
-        ; The calculates how much left or right or up or down
+        ; The calculates how much east or west or north or south
         ; the boat is going depending on its direction
         ; and how long it has been facing that way
         LDA     zp_boat_direction

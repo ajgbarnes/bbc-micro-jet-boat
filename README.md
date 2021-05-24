@@ -1,4 +1,4 @@
-# Work in progress
+# Jet Boat - Work in progress
 
 This is a disassembly of the Software Invasion game Jet Boat.  Originally written by Robert J. Leatherbarrow in 1984.
 
@@ -17,7 +17,7 @@ I use the rather excellent [BeebAsm](https://github.com/stardot/beebasm) by *Ric
 
 ```beebasm -i .\jetboat-commented.asm -do jetboat-new.ssd -di jetnew.ssd```
 
-3. I run it then using [beebjit](https://github.com/scarybeasts/beebjit) created by Chris Evans(scarybeasts) using:
+3. I run it then using [beebjit](https://github.com/scarybeasts/beebjit) created by *Chris Evans(scarybeasts)* using:
 
 ```beebjit -0 jetboat-new.ssd```
 

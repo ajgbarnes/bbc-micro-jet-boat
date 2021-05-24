@@ -33,5 +33,9 @@ I use the rather excellent [BeebAsm](https://github.com/stardot/beebasm) by *Ric
 
 4. Shift+Break (F12) to run the compiled game
 
+Note that when it compiles the binary is *byte identical* to the original.
+
+Hope you can learn something from this disassembly and it inspires a project. 
+
 Andy Barnes
 

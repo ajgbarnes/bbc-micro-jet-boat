@@ -36,7 +36,7 @@ OSASCI = $FFE3
 OSNEWL = $FFE7
 ; Write character (to screen) from A
 OSWRCH = $FFEE
-; Perfrom miscellaneous OS operation using control block to pass parameters
+; Perfrom miscellaneous OS opferation using control block to pass parameters
 OSWORD = $FFF1
 ; Perfrom miscellaneous OS operation using registers to pass parameters
 OSBYTE = $FFF4
@@ -63,8 +63,7 @@ mode_5_screen_centre =  $6A10
 
 L0019   = $0019
 L001A   = $001A
-zp_north_or_south_on_this_loop_status   = $0024
-zp_east_or_west_on_this_loop_status   = $0025
+
 L002A   = $002A
 L002B   = $002B
 L002C   = $002C
@@ -126,6 +125,8 @@ zp_high_score_position = $0020
 zp_high_score_name_lsb = $0021
 zp_high_score_name_msb = $0022
 zp_pre_game_scrolling_status = $0023
+zp_north_or_south_on_this_loop_status   = $0024
+zp_east_or_west_on_this_loop_status   = $0025
 zp_graphics_source_lsb = $0026
 zp_graphics_source_msb = $0027
 zp_text_colour = $0061
@@ -171,8 +172,9 @@ right_key_string_from_loader = $7BE0
 accel_key_string_from_loader = $7BF0
 
 
-ORG $0B40
+ORG &0B40
 
+.main_code_block
 ;L0B40
 .fn_write_y_tiles_to_off_screen_buffer
         ; Gets a vertical column of tile graphics and
@@ -366,7 +368,7 @@ ORG $0B40
         LDA     #$00
         STA     zp_graphics_tiles_storage_lsb
         LDA     #$06
-        STA     zp_graphics_tiles_storage_lsb
+        STA     zp_graphics_tiles_storage_msb
 
         ; In Mode 5 the screen has $27 / 39 columns of bytes
         ; So we need tiles for all of those bytes
@@ -400,9 +402,9 @@ ORG $0B40
         STA     zp_graphics_tiles_storage_lsb
 
         ; Increment the MSB if it carried
-        LDA     zp_graphics_tiles_storage_lsb
+        LDA     zp_graphics_tiles_storage_msb
         ADC     #$00
-        STA     zp_graphics_tiles_storage_lsb
+        STA     zp_graphics_tiles_storage_msb
 
         ; y axis only goes to 128 so if we reach 
         ; 128 we need to reset to zero
@@ -444,7 +446,12 @@ ORG $0B40
         LDY     #$00
         JSR     OSBYTE
 
-; 0BF8
+;0BF5
+        ; Looks like an infinite loop?
+.here
+        JMP     here
+
+;0BF8
 .fn_game_start
         ; Reset the stack pointer (start "clean")
         LDX     #$FF
@@ -511,7 +518,7 @@ ORG $0B40
         ; to be the set timer function
         LDA     #LO(fn_set_timer_64ms)
         STA     eventv_lsb_vector
-        LDA     #HI(fn_set_timer_64ms DIV 256)
+        LDA     #HI(fn_set_timer_64ms)
         STA     eventv_msb_vector
 
 ;L0C57
@@ -1254,7 +1261,7 @@ ORG $0B40
         ; been copied
         STA     dummy_screen_start,Y
         DEY
-        BPL     loop_copy_graphics_column_8_bytes
+        BPL     loop_copy_graphics_column_next_byte
 
 ;L0F03
         ; Load the LSB for the screen write address
@@ -1627,7 +1634,7 @@ ORG $0B40
         STA     dummy_screen_start,Y
         DEY
         ; Loop again until we have copied 8 bytes
-        BPL     loop_copy_more_graphics
+        BPL     load_from_graphics_buffer
 
         ; Get the screen start address LSB
         LDA     write_to_screen_address + 1
@@ -1678,16 +1685,16 @@ ORG $0B40
         STA     write_to_screen_address + 2
 
 .move_to_next_8_bytes
-        ; Move to the next 8 bytes
+         ; Move to the next 8 bytes
         CLC
-        LDA     write_to_screen_address + 1
+        LDA     load_from_graphics_buffer + 1
         ADC     #$08
-        STA     write_to_screen_address + 1
+        STA     load_from_graphics_buffer + 1
         BCC     no_screen_address_carry
 
         ; There was a carry (LSB > 255) so add
         ; 1 to the MSB for screen start address
-        INC     write_to_screen_address + 2
+        INC     load_from_graphics_buffer + 2
 .no_screen_address_carry
         DEX
         BPL    loop_copy_more_graphics
@@ -2341,7 +2348,8 @@ ORG $0B40
         ; but Z in the code below
         ; INKEY value is 2-complements so to get value
         ; ((FF - 9E) + 1) * -1
-        LDX     #$9E
+        ; LDX     #$9E
+        LDX     #$BF
 left_key_game = read_left_key+1
         JSR     fn_read_key
 
@@ -2389,7 +2397,8 @@ left_key_game = read_left_key+1
         ; the user defined or default key from the loading
         ; menus - defaults to be Ctrl from the menus
         ; but Z in the code below
-        LDX     #$BD
+        ;LDX     #$BD
+        LDX     #&FE
 right_key_game = read_right_key+1
         JSR     fn_read_key
 
@@ -2436,7 +2445,8 @@ right_key_game = read_right_key+1
         ; the user defined or default key from the loading
         ; menus - defaults to be Ctrl from the menus
         ; but shift in the code below   
-        LDX     #$FF
+        ; LDX     #$FF
+        LDX     #$B6
 accel_key_game = read_accelerate+1
         JSR     fn_read_key
 
@@ -3306,13 +3316,13 @@ accel_key_game = read_accelerate+1
 
         ; Add the LSB for the where the number
         ; graphics are held in memory
-        ADC     #graphics_numbers MOD 256
+        ADC     #$40
         STA     zp_graphics_numbers_lsb
         LDA     #$00
 
         ; Add the MSB for the where the number
         ; graphics are held in memory ($0740)
-        ADC     #graphics_numbers DIV 256
+        ADC     #$07
         STA     zp_graphics_numbers_msb
 
         ; Each number graphic is 16 bytes
@@ -3822,9 +3832,9 @@ accel_key_game = read_accelerate+1
 
 .completed_lap_next_sound
         LDA     pitch_table_completed_lap,X
-        STA     .sound_completed_lap_pitch
+        STA     sound_completed_lap_pitch
         LDA     duration_table_completed_lap,X
-        STA     .sound_completed_lap_duration
+        STA     sound_completed_lap_duration
 
         ; Preserve the X index value
         TXA
@@ -3840,8 +3850,8 @@ accel_key_game = read_accelerate+1
         ; SOUND 2, 2, 145, 4
         ; SOUND 2, 2, 145, 3
         LDA     #$07
-        LDX     #sound_completed_lap DIV 256
-        LDY     #sound_completed_lap MOD 256
+        LDX     #LO(sound_completed_lap)
+        LDY     #HI(sound_completed_lap)
         JSR     OSWORD
 
         ; Restore the X index value
@@ -3887,8 +3897,8 @@ accel_key_game = read_accelerate+1
         ; Sounds 10:
         ;   1 - Flush the channel and play this sound immediately
         ;   0 - Play on channel 0
-        LDX     #sound_boat_move_first MOD 256
-        LDY     #sound_boat_move_first DIV 256
+        LDX     #LO(sound_boat_move_first)
+        LDY     #HI(sound_boat_move_first)
         LDA     #$07
         JSR     OSWORD
         
@@ -3904,8 +3914,8 @@ accel_key_game = read_accelerate+1
         LDX     zp_boat_speed
         LDA     duration_lookup_sound_table,X
         STA     sound_boat_move_second_pitch
-        LDX     #sound_boat_move_second MOD 256
-        LDY     #sound_boat_move_second DIV 256
+        LDX     #LO(sound_boat_move_second)
+        LDY     #HI(sound_boat_move_second)
         LDA     #$07
         JMP     OSWORD
 
@@ -4028,7 +4038,7 @@ accel_key_game = read_accelerate+1
         ; And store on the stack
         LDA     high_score_name_lsb + 7
         PHA
-        LDA     high_score_names
+        LDA     high_score_names - 1
         PHA
 
         ; If the player score goes into the bottom of the table
@@ -4063,7 +4073,7 @@ accel_key_game = read_accelerate+1
         ; where the player's score will go we've finished
         ; the demotions
         CPX     zp_high_score_position
-        BEQ     demote_high_scores
+        BEQ     high_scores_demoted
 
         ; Move to the next high score in the table
         DEX
@@ -4236,7 +4246,7 @@ accel_key_game = read_accelerate+1
         ; 1957 - 19F6 contain the name strings
         LDA     high_score_name_lsb,X
         STA     zp_high_score_name_lsb
-        LDA     high_score_name_lsb,X
+        LDA     high_score_name_msb,X
         STA     zp_high_score_name_msb
         LDY     #$00
 
@@ -4246,7 +4256,7 @@ accel_key_game = read_accelerate+1
         ; and only 12 characters are allowed?
         LDA     (zp_high_score_name_lsb),Y
         CMP     #$0D
-        BEQ     skip_print_control_code
+        BEQ     high_score_name_completed
 
         ; If it's a control character (less than ASCII $20/32)
         ; then don't output it
@@ -4582,7 +4592,7 @@ accel_key_game = read_accelerate+1
 
 ;L1A6D
 .string_press_space_or_fire
-        EQUS    $87,$88,"Press SPACE or FIRE to start",$0D,$85
+        EQUS    $87,$88,"Press SPACE or FIRE to start",$0D
 
 ;L1A8C
 .string_enter_name
@@ -4853,8 +4863,8 @@ accel_key_game = read_accelerate+1
         ADC     zp_graphics_tiles_storage_lsb
         STA     zp_graphics_tiles_storage_lsb
         LDA     #$00
-        ADC     zp_graphics_tiles_storage_lsb
-        STA     zp_graphics_tiles_storage_lsb
+        ADC     zp_graphics_tiles_storage_msb
+        STA     zp_graphics_tiles_storage_msb
         DEC     L002D
         LDA     L002D
         BNE     L1BA7
@@ -4894,6 +4904,8 @@ accel_key_game = read_accelerate+1
 
 ;....
 
+INCLUDE "hazards.asm"
+
 ; 1D10
 .high_score_screen
         EQUS    $94,$9D,$87,"     ",$93,$F0,$F0,$F0,$B0," ",$96,$9A,$A0,$80,$B8,$A1,$F0,"  ",$B8,"                ",$94,$9D,$87,"HIGH ",$93,$FF,$A0," ",$FF,$9A,$96,$B6,$E0,$A6," ",$B6,$AC,$E1,$A6,$E3
@@ -4902,11 +4914,24 @@ accel_key_game = read_accelerate+1
         EQUS    $87,"SCORES ",$94,$9D,$87,"     ",$93,$A3,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"         "
 ; 1E00
 
+INCLUDE "graphics.asm"
+
+.main_code_block_end
+
+
+load = $1100
+main_code_block_load = load
+relocate_code_block_load = main_code_block_load + (main_code_block_end - main_code_block)
+COPYBLOCK main_code_block, main_code_block_end, main_code_block_load
+
+
+
 ; ----------------------------------------------------------------------------------------
 ; Move Memory One off
 ; Currently from 5DC0 ++
 ; ----------------------------------------------------------------------------------------
-ORG $5DC0
+ORG relocate_code_block_load
+.relocate_code_block
 	; First time through, var 6 will always
 	; be 0 so will go to L5DD4
 .fn_copy_memory
@@ -5090,13 +5115,22 @@ ORG $5DC0
         STA     right_key_game
         LDA     accel_key_value
         STA     accel_key_game
+
+        JSR     fn_hide_cursor
 	
         ; Wait for user input to start game (in game code)
         JSR     fn_wait_for_intro_input 
 
         JMP     fn_game_start
 
-;....   
+  
+; 5EA7
+.junk_bytes
+        EQUB    $69,$72,$64,$73,$65,$79,$65,$22
+        EQUB    $2C,$22,$4C,$6F,$6E,$67,$20,$4A
+        EQUB    $6F,$68,$6E,$22,$2C,$22,$46,$72
+        EQUB    $61
+
 ; 5EC0
 .graphics_times_up_clock
         EQUB    $00,$01,$03,$03,$03,$03,$01,$00
@@ -5196,6 +5230,7 @@ ORG $5DC0
 ;60A0
 .unused_bytes
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
 
 ;......
 ;60b0
@@ -5248,29 +5283,80 @@ ORG $5DC0
 
 ; 64B0
 .graphics_get_ready_icon
-        EQUB    $F0,$F7,$F4,$F7,$F1,$F1,$F7,$F0
-        EQUB    $F0,$F7,$F4,$F4,$F4,$F4,$F7,$F0
-        EQUB    $F0,$F7,$F5,$F5,$F5,$F5,$F7,$F0
-        EQUB    $F0,$F7,$F5,$F5,$F6,$F5,$F5,$F0
-        EQUB    $F0,$F6,$F4,$F6,$F4,$F4,$F6,$F0
+        EQUB    $05,$05,$05,$05,$0F,$F0,$30,$F0
+        EQUB    $05,$05,$05,$05,$0F,$F0,$00,$77
+        EQUB    $05,$05,$05,$05,$0F,$F0,$00,$66
+        EQUB    $05,$05,$05,$05,$0F,$F0,$00,$EE
+        EQUB    $05,$05,$05,$05,$0F,$F0,$C0,$F0
+        EQUB    $30,$F0,$30,$F0,$30,$F0,$30,$F0
+        EQUB    $55,$44,$44,$55,$55,$77,$11,$00
+        EQUB    $44,$44,$66,$44,$44,$44,$66,$00
+        EQUB    $44,$44,$44,$44,$44,$44,$44,$00
+        EQUB    $C0,$F0,$C0,$F0,$C0,$F0,$C0,$F0
 
-        EQUB    $F0,$F0,$80,$D0,$D0,$D0,$D0,$F0
-        EQUB    $F0,$F0,$A0,$A0,$A0,$A0,$A0,$F0
-        EQUB    $F0,$F0,$40,$A0,$A0,$A0,$A0,$F0
-        EQUB    $F0,$F0,$90,$B0,$90,$B0,$90,$F0
-        EQUB    $10,$10,$10,$10,$10,$10,$10,$10
+; Possibly junk above        
+        EQUB    $F0,$F7,$F5,$F5,$F7,$F6,$F5,$F5
+        EQUB    $F0,$F6,$F4,$F4,$F6,$F4,$F4,$F4
+        EQUB    $F0,$F4,$FA,$FA,$FE,$FA,$FA,$FA
+        EQUB    $F0,$FC,$FA,$FA,$FA,$FA,$FA,$FA
+        EQUB    $F0,$FA,$FA,$FA,$F4,$F4,$F4,$F4
+        EQUB    $F5,$F0,$F0,$0F,$07,$07,$02,$02
+        EQUB    $F6,$F0,$F0,$0F,$03,$03,$01,$01
+        EQUB    $FA,$F0,$F0,$0F,$09,$09,$00,$00
+        EQUB    $FC,$F0,$F0,$0F,$0C,$0C,$08,$08
+        EQUB    $F4,$F0,$F0,$0F,$0E,$0E,$04,$04
 
-        EQUB    $F0,$00,$40,$40,$40,$40,$60,$00
-        EQUB    $F0,$00,$40,$A0,$E0,$A0,$A0,$00
-        EQUB    $F0,$00,$E0,$A0,$E0,$80,$80,$00
-        EQUB    $80,$80,$80,$80,$80,$80,$80,$80
+        EQUB    $00,$86,$40,$00,$00,$00,$3F,$67
+        EQUB    $6D,$61,$67,$65,$64,$61,$74,$61
+        EQUB    $00,$86,$4C,$00,$00,$00,$DF,$65
+        EQUB    $73,$74,$61,$72,$74,$00,$87,$0A
+        EQUB    $00,$00,$00,$E7,$65,$73,$74,$61
+        EQUB    $72,$74,$00,$87,$26,$00,$00,$00
+        EQUB    $46,$72,$65,$74,$43,$6F,$6C,$00
+        EQUB    $87,$42,$00,$00,$00,$68,$6E,$6F
+        EQUB    $4C,$00,$04,$00,$A9,$80,$8D,$CA
+        EQUB    $03,$4C,$E1,$5D,$00,$00,$00,$00 
+
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
-        
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00        
+
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00 
+
         EQUB    $00,$00,$00,$00,$00,$00,$00,$00
-	
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00 
+
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00 
+
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00        
+
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00                
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00                
+        EQUB    $00,$00,$00,$00,$00,$00,$00,$00        
+
+.relocate_block_end
+
      
-SAVE "jb-new",$1100, $654F
+SAVE "Jetboa1", load, relocate_block_end, start_point

@@ -2,7 +2,7 @@
 
 This is a disassembly of the **Software Invasion** game **Jet Boat**.  Originally written by **Robert J. Leatherbarrow** in 1984.
 
-I did not intend to decompile and understand its inner workings until reivisitng this game some 35 years on, wondering why it juddered all the time and was so unplayable. It turns out that there is an issue with my Analogue Joystick port on my old BBC Model B which creates constant noise - the code always checks both keyboard and joystick input (rather than just switching to the one that started the game).  That's not a problem on good BBC Micro but is on mine and a Master Compact (that doesn't have an analogue port).  I recompiled a version that disabled joystick support for the Master Compact, which can be found on [StarDot](https://stardot.org.uk/forums/viewtopic.php?p=319995#p319995).
+I did not intend to decompile and understand its inner workings until revisitng this game some 35 years on, wondering why it juddered all the time and was so unplayable. It turns out that there is an issue with my Analogue Joystick port on my old BBC Model B which creates constant noise - the code always checks both keyboard and joystick input (rather than just switching to the one that started the game).  That's not a problem on good BBC Micro but is on mine and a Master Compact (that doesn't have an analogue port).  I recompiled a version that disabled joystick support for the Master Compact, which can be found on [StarDot](https://stardot.org.uk/forums/viewtopic.php?p=319995#p319995).
 
 You can play the game in your browser here at [bbcmicro.co.uk](http://www.bbcmicro.co.uk/game.php?id=187)
 
@@ -23,7 +23,7 @@ And all editing was completed in [Visual Studio Code](https://code.visualstudio.
 I use the rather excellent [BeebAsm](https://github.com/stardot/beebasm) by *Richard Talbot-Watkins* and I compiled this on WIndows 10.
 
 1. Download the [beebasm.exe](https://github.com/stardot/beebasm/blob/master/beebasm.exe) into the same directory as your clone of this repository
-2. Run the following command - the jetnew.ssd image containst he basic loaders, currently required as the memory relocator overwrites the hard coded key values with whatever it finds in memory.  If it's blank, you will not be able to control the boat.
+2. Run the following command - the jetnew.ssd image contains the basic loaders, currently required as the memory relocator overwrites the hard coded key values with whatever it finds in memory.  If it's blank, you will not be able to control the boat.
 
 ```beebasm -i .\jetboat-commented.asm -do jetboat-new.ssd -di jetnew.ssd```
 
@@ -36,6 +36,18 @@ I use the rather excellent [BeebAsm](https://github.com/stardot/beebasm) by *Ric
 Note that when it compiles the binary is *byte identical* to the original.
 
 Hope you can learn something from this disassembly and it inspires a project. 
+
+# Generating the map
+
+I wrote a node.js script to inspect the BBC Micro binary and generate the map from it. To run it, install [node.js](https://nodejs.org/en/download/).  I used 14.17.0 to develop this.  Then:
+
+1. Ensure the Jet Boat binary is available and named **jetboa1** - it should NOT be in an SSD
+2. Run **npm install canvas** - I might get around to putting in a package.json if I need more libraries
+3. Run the script using **node generate-map.js** (in the Powershell on windows you'll have to use node ./generate-map.js)
+4. Open the generated jetboat-map.png image file
+5. Enjoy!
+
+![alt text](https://github.com/adam-p/markdown-here/raw/master/src/common/images/icon48.png "Logo Title Text 1")
 
 Andy Barnes
 

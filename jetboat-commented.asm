@@ -282,11 +282,11 @@ ORG &0B40
         ;       0 =< y < 80-
         ; 
         ; So 128 tiles across the map
-        ; So 128 tiles down the map
+        ; So 80 tiles down the map
         ;
         ; Simple algorithm for (x,y) tile type lookup
         ; 
-        ;    Tile type memory address = $3000 + ((y * $FF) / 2) + x
+        ;    Tile type memory address = $3000 + (y * 128) + x
         ;
         ; So first x row (y=0)  is stored $3000 to $307F
         ; Next x row     (y=1)  is stored $3080 to $30FF
@@ -1110,7 +1110,7 @@ ORG &0B40
         JSR     fn_set_6845_screen_start_address
 
         ; Check to see if the screen should be scrolled up or down
-        ; if not, branch ahead.s
+        ; if not, branch ahead.
         LDA     zp_scroll_south_status
         EOR     zp_scroll_north_status
         BEQ     skip_row_to_screen_copy
@@ -1408,7 +1408,7 @@ ORG &0B40
 ;L0F6B
 .bulk_copy_tile_row_to_screen
         ; The 320 bytes that will be copied will not cross 
-        ; the screen threshold so this section bulk copies
+        ; the screen     threshold so this section bulk copies
         ; without checking for screen memory overflow
         ;
         ; Only used to copy if the start memory address for the

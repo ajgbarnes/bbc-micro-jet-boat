@@ -14,8 +14,17 @@ const height = 80*8;
 const rgbaBlack   = [0,0,0,255];
 const rgbaBlue    = [0,0,255,255];
 const rgbaRed     = [255,0,0,255];
+const rgbaGreen   = [0,255,0,255];
 const rgbaWhite   = [255,255,255,255];
 const rgbaYellow  = [255,255,0,255];
+const rgbaMagenta = [255,0,255,255];
+
+const colourSchemeList = [
+    [rgbaBlue, rgbaYellow, rgbaRed, rgbaWhite],
+    [rgbaBlue, rgbaYellow, rgbaGreen, rgbaWhite],
+    [rgbaBlue, rgbaMagenta, rgbaWhite, rgbaYellow],
+    [rgbaBlue, rgbaYellow, rgbaMagenta, rgbaWhite]
+];
 
 // Create the canvas and get the context - 
 // this is where the map image will be drawn
@@ -159,20 +168,20 @@ fs.readFile('jetboa1', (err, data) => {
 
     // Based on the two bits masked out of the byte, work out 
     // the colour for the current pixel
-    function getPixelColour(currentPixel) {
+    function getPixelColour(currentPixel, colourScheme) {
         let colour = rgbaRed; 
         switch(currentPixel) {
             case 0:
-                colour = rgbaBlue;
+                colour = colourSchemeList[colourScheme][0];
                 break;
             case 1:
-                colour = rgbaYellow;
+                colour = colourSchemeList[colourScheme][1];
                 break;
             case 16:
-                colour = rgbaRed;
+                colour = colourSchemeList[colourScheme][2];
                 break;                
             case 17 :
-                colour = rgbaWhite;
+                colour = colourSchemeList[colourScheme][3];
                 break;                                
             default:
                 break;
@@ -229,68 +238,71 @@ fs.readFile('jetboa1', (err, data) => {
     //    3. Go through each byte and pull out the four individual pixels
     //    4. Write each pixel to the canvas
 
-    // Loop through all the y co-ordinates in the (x,y) on the map
-    for(let y=0; y<80; y++) {
-        // Loop through all the x co-ordinates in the (x,y) on the map
-        for(let x=0; x< 128; x++) {
-            // Find the tile type for the current (x,y) position
-            tileType = getTileType(x,y)
-            // Find the tile type data (8 bytes) in the file
-            tileAddress = getTileAddress(tileType);
+    for(let colourScheme=0; colourScheme<4; colourScheme++) {
 
-            // Will do something with this later... 
-            // tileArray just holds the map to tile type
-            // tileSet just shows me which tile type numbers were used
-            tileArray[x][y]=tileType;
-            tileSet.add(tileType);
+        // Loop through all the y co-ordinates in the (x,y) on the map
+        for(let y=0; y<80; y++) {
+            // Loop through all the x co-ordinates in the (x,y) on the map
+            for(let x=0; x< 128; x++) {
+                // Find the tile type for the current (x,y) position
+                tileType = getTileType(x,y)
+                // Find the tile type data (8 bytes) in the file
+                tileAddress = getTileAddress(tileType);
 
-            // Loop over each of the 8 bytes for the tile type
-            // Pull out the individual pixesl for each (4 pixels per byte)
-            // Write them to the canvas in the correct place
-            for(let byte = 0; byte<8; byte++) {
-                // Get the current nth byte for the tile (up to 8th)
-                currentByte = fileBuffer[tileAddress + byte];
+                // Will do something with this later... 
+                // tileArray just holds the map to tile type
+                // tileSet just shows me which tile type numbers were used
+                tileArray[x][y]=tileType;
+                tileSet.add(tileType);
 
-                // Pixel mask used to pull out the four individual pixels
-                // from the byte (it's rotated right each time around the loop)
-                pixelMask = 0b10001000;
-                for(let bytePixel = 0; bytePixel < 4; bytePixel++) {
-                    // Find out where on the canvas the pixel should be written
-                    writex = getPixelXPosition(x,y,byte,bytePixel);
-                    writey = getPixelYPosition(x,y,byte,bytePixel);
+                // Loop over each of the 8 bytes for the tile type
+                // Pull out the individual pixesl for each (4 pixels per byte)
+                // Write them to the canvas in the correct place
+                for(let byte = 0; byte<8; byte++) {
+                    // Get the current nth byte for the tile (up to 8th)
+                    currentByte = fileBuffer[tileAddress + byte];
 
-                    // Get the current pixel (4 per byte, 2 bits per pixel)
-                    currentPixel = (currentByte & pixelMask);
+                    // Pixel mask used to pull out the four individual pixels
+                    // from the byte (it's rotated right each time around the loop)
+                    pixelMask = 0b10001000;
+                    for(let bytePixel = 0; bytePixel < 4; bytePixel++) {
+                        // Find out where on the canvas the pixel should be written
+                        writex = getPixelXPosition(x,y,byte,bytePixel);
+                        writey = getPixelYPosition(x,y,byte,bytePixel);
 
-                    // Make all the pixels in the byte the same 2-bits
-                    // to represent colour and lookup the colour
-                    currentPixel = currentPixel >>> (3-bytePixel);
-                    currentColour = getPixelColour(currentPixel);
+                        // Get the current pixel (4 per byte, 2 bits per pixel)
+                        currentPixel = (currentByte & pixelMask);
 
-                    // Calculate where in the buffer for the canvas the 
-                    // write position is for the canvas x,y position
-                    pixelLocation = getPixelPosition(writex,writey,canvas.width);
+                        // Make all the pixels in the byte the same 2-bits
+                        // to represent colour and lookup the colour
+                        currentPixel = currentPixel >>> (3-bytePixel);
+                        currentColour = getPixelColour(currentPixel, colourScheme);
 
-                    // Set the rgba values in the buffer for the canvas for this pixel
-                    pixels[pixelLocation]  =  currentColour[0];  // red
-                    pixels[pixelLocation+1]=  currentColour[1];  // green
-                    pixels[pixelLocation+2]=  currentColour[2]; // blue
-                    pixels[pixelLocation+3]=  currentColour[3];
+                        // Calculate where in the buffer for the canvas the 
+                        // write position is for the canvas x,y position
+                        pixelLocation = getPixelPosition(writex,writey,canvas.width);
 
-                    // Rotate right the pixel mask to get the next pixel from the
-                    // the byte (up to 4)
-                    pixelMask = pixelMask >>> 1;
-                }
-            }
-        }
-    }    
+                        // Set the rgba values in the buffer for the canvas for this pixel
+                        pixels[pixelLocation]  =  currentColour[0];  // red
+                        pixels[pixelLocation+1]=  currentColour[1];  // green
+                        pixels[pixelLocation+2]=  currentColour[2]; // blue
+                        pixels[pixelLocation+3]=  currentColour[3];
 
-    // Update the canvas and write it to a png
-    context.putImageData(imageData,0,0);
-    const imageBuffer = canvas.toBuffer('image/png');
-    fs.writeFileSync('./jetboat-map.png', imageBuffer);
+                        // Rotate right the pixel mask to get the next pixel from the
+                        // the byte (up to 4)
+                        pixelMask = pixelMask >>> 1;
+                    } // bytePixel
+                } // byte
+            } // x
+        }  // y  
 
-    //console.log(Array.from(tileSet).sort((a,b)=>a-b));
-    //console.log(tileArray);
-    //console.log(tileArray[0x1d][0x0b]);
+        // Update the canvas and write it to a png
+        context.putImageData(imageData,0,0);
+        const imageBuffer = canvas.toBuffer('image/png');
+        fs.writeFileSync('./jetboat-map-scheme-'+colourScheme+'.png', imageBuffer);
+
+        //console.log(Array.from(tileSet).sort((a,b)=>a-b));
+        //console.log(tileArray);
+        //console.log(tileArray[0x1d][0x0b]);
+    } // colourScheme
 });

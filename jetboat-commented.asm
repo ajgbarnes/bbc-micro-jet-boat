@@ -4753,7 +4753,7 @@ accel_key_game = read_accelerate+1
         ; Y now 4
         INY
         INX
-        ; Check to see if X is 30 or greater - if so loop
+        ; Check to see if X is greater than max value in L30 - if so loop
         CPX     L0030
         BNE     load_lookup_table_loop
 
@@ -4766,7 +4766,7 @@ accel_key_game = read_accelerate+1
         LDX     L0032
 .L1B6F
         LDA     (L002B),Y
-        ; L0038 to L0045 set to (reversed though)
+        ; L0052 to L0045 set to (reversed though)
         ; 32 31 2F 30 33 7F 7E 7D 7F 7E 4A 4B 4A
         ; LSB of graphic
         STA     L0045,X
@@ -4777,8 +4777,8 @@ accel_key_game = read_accelerate+1
 
         LDX     L0032
 .L1B79
-        ; L0046 to L0053 set to
-        ; 4A 4C 4B 4C 4C 4D 4C 17 18 17 15 19 26
+        ; L0053 to L0060 set to
+        ; 4A 4B 4A m 4B 4C 4C 4D 4C 17 18 17 15 19 26
         ; MSB of graphic
         LDA     (L002B),Y
         STA     L0053,X
@@ -4788,6 +4788,8 @@ accel_key_game = read_accelerate+1
 
         LDX     L0032
 .L1B83
+; Calculate next hazard tile value? 
+; Storage address = (MSB00) / 2 + $3000 + LSB
         ; Set 70 to 0 - then look at the second buffered value
         ; Put the lowest bit as the highest bit in 0070
         ; so 70 = $0 or $80 / 128
@@ -4801,7 +4803,7 @@ accel_key_game = read_accelerate+1
         ; Divide A by two
         LSR     A
 
-        ; Roll the carry clag in the LSB just to throw away
+        ; Roll the carry flag in the LSB just to throw away
         ; the carry (why not use CLC?)
         ROR     zp_graphics_tiles_storage_lsb
         ; add $30 to first buffered value and store in 71 (becomes 55)
@@ -4812,6 +4814,7 @@ accel_key_game = read_accelerate+1
         ; Store result in LSB throwing away carry above
         STA     zp_graphics_tiles_storage_msb
 
+        ; 4b / 2 = 25
 
         LDA     zp_graphics_tiles_storage_lsb
         ; Clear carry flag
@@ -4829,6 +4832,7 @@ accel_key_game = read_accelerate+1
         LDA     #$00
         ADC     zp_graphics_tiles_storage_msb
         STA     zp_graphics_tiles_storage_msb
+
         LDY     #$00
         TXA
         PHA
@@ -4842,6 +4846,7 @@ accel_key_game = read_accelerate+1
         LDA     L0033,X
         ; Check to see if bit 7 is positive
         ; 2A is set to FF - top two bits are taking into overflow and zero
+        ; If some non-game state set A to 3
         BIT     L002A
         BPL     L1BB3
 
@@ -4851,15 +4856,22 @@ accel_key_game = read_accelerate+1
         STA     (zp_graphics_tiles_storage_lsb),Y
         INY
         INX
+        ; If there are still bytes to read copy them to the graphics storage
         INC     L0031
         LDA     L0031
         CMP     L002E
         BNE     L1BAB
 
+
+        ; Load 80 value
         LDA     #$80
+        ; Set the carry
         SEC
+        ; Subtract value of 2E which is one the first time
+        ; so 7F is the result
         SBC     L002E
         CLC
+        ; Add 7F to 55B2 
         ADC     zp_graphics_tiles_storage_lsb
         STA     zp_graphics_tiles_storage_lsb
         LDA     #$00
@@ -4915,6 +4927,8 @@ INCLUDE "hazards.asm"
 ; 1E00
 
 INCLUDE "graphics.asm"
+; 3000
+INCLUDE "tile-map-formatted.asm"
 
 .main_code_block_end
 

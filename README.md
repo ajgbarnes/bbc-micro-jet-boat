@@ -47,14 +47,8 @@ I wrote a node.js script to inspect the BBC Micro binary and generate the map fr
 4. Open the generated jetboat-map.png image file
 5. Enjoy!
 
-![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-scheme-0.png "Jet Boat Map - Colour Scheme 0")
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-scheme-all.png "Jet Boat Map - All Colour Schemes Tessellated")
 
-![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-scheme-1.png "Jet Boat Map - Colour Scheme 1")
-
-![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-scheme-2.png "Jet Boat Map - Colour Scheme 2")
-
-![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-scheme-3.png "Jet Boat Map - Colour Scheme 3")
 
 
 Andy Barnes
-

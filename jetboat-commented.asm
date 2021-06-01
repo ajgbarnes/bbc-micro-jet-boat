@@ -64,18 +64,7 @@ mode_5_screen_centre =  $6A10
 L0019   = $0019
 L001A   = $001A
 
-L002A   = $002A
-L002B   = $002B
-L002C   = $002C
-L002D   = $002D
-L002E   = $002E
-L002F   = $002F
-L0030   = $0030
-L0031   = $0031
-L0032   = $0032
-L0033   = $0033
-L0045   = $0045
-L0053   = $0053
+
 
 ; Zero page variables
 ; Indicates the direction the boat is facing
@@ -129,6 +118,18 @@ zp_north_or_south_on_this_loop_status   = $0024
 zp_east_or_west_on_this_loop_status   = $0025
 zp_graphics_source_lsb = $0026
 zp_graphics_source_msb = $0027
+zp_reset_hazards_status = $002A
+zp_hazard_config_lsb   = $002B
+zp_hazard_config_msb   = $002C
+zp_hazard_height_index   = $002D
+zp_hazard_num_tiles_width   = $002E
+zp_hazard_num_tiles_height   = $002F
+zp_total_tiles_for_hazard   = $0030
+zp_hazard_width_index   = $0031
+zp_total_hazard_occurrences   = $0032
+zp_hazard_first_tile_type   = $0033
+zp_hazard_first_x_coordinate   = $0045
+zp_hazard_first_y_coordinate   = $0053
 zp_text_colour = $0061
 zp_current_stage = $0062
 zp_laps_for_current_stage = $0063
@@ -570,34 +571,48 @@ ORG &0B40
 
         ; Set the statuses that the screen is scrolling
         ; right and that it's the intro screen
+        ; Also set the flag to reset the hazards to 
+        ; water tiles (always sets hazards to water tiles 
+        ; if the zp_reset-hazards_status is $FF)
         LDA     #$FF
         STA     zp_scroll_east_status
         STA     zp_intro_screen_status
-        STA     L002A
+        STA     zp_reset_hazards_status
 
-        ; Set X=0
+        ; Set the index counter for looping through all the 
+        ; different types of hazard
         LDX     #$00
 
-        ; TODO SOME LOOP
-.some_loop
+        ; Reset all the hazards back to a water tile - on the first
+        ; lap there are no additional hazards over the standard map
+        ; So this goes through all the hazard (x,y) on the map and 
+        ; sets each to a water tile - the X register defines 
+        ; which set of hazards e.g. ducks
+.reset_next_set_of_hazards
+        ; Preserve the hazard index before calling the reset
         TXA
         PHA
-        ; Load the additional hazards for this lap in this
-        ; stage - they get progressively harder per stage lap
-        ; There are 13 levels of difficulty per stage 
-        ; where additional objects are added to the map
-        JSR     fn_setup_read_lookup_table        
 
+        ; Clear all the hazards from the map - loop through
+        ; all the hazard configs (there are 11 types) which
+        ; get added to the map at each progressive lap in a stage
+        ; - this just resets them to a water tile
+        JSR     fn_get_hazard_for_index_and_apply_or_reset        
+
+        ; Restore the hazard index before calling the reset
         PLA
         TAX
         INX
+        ; Check to see if any more hazards to reset, if so
+        ; loop onto the next one
         CPX     #$0B
-        BNE     some_loop
+        BNE     reset_next_set_of_hazards
 
-        ;TODO 
-        ; Set variable 2A to 0
+        ; If we add hazards to the map now, don't reset them
+        ; to water - always set to water if this flag is $FF 
+        ; otherwise uses the lookup table value
         LDA     #$00
-        STA     L002A
+        STA     zp_reset_hazards_status
         
         ; Select screen mode to 5
         ; MODE 5
@@ -2189,7 +2204,7 @@ ORG &0B40
         ; N, NNW, NW, NWW, W, WSW, SW, SSW
         ; S, SSE, SE, ESE, E, ENE, NE, NNE
         ;
-        ; Each graphic is 160 bytes across 3 chunks
+        ; Each graphic is 160 bytes across 4 chunks of 40 bytes
         ;
         ; 120F
 .boat_graphic_location_lsb
@@ -3475,7 +3490,8 @@ accel_key_game = read_accelerate+1
         ; time decrementing - change to e.g.$04 and it will
         ; never decrement
 .timer_poke
-        CMP     #$05
+        ; TODO Change this back to 05
+        CMP     #$04
         BNE     set_timer_64ms_end
 
         ; Preserve Accumulator, X and Y on the stack
@@ -3603,8 +3619,10 @@ accel_key_game = read_accelerate+1
         ; stage - they get progressively harder per stage lap
         ; There are 13 levels of difficulty per stage 
         ; where additional objects are added to the map
+        ; Each set of hazards is additive e.g. first the ducks are
+        ; added, then on the next lap another type of hazard
         LDX     zp_laps_for_current_stage
-        JSR     fn_setup_read_lookup_table
+        JSR     fn_get_hazard_for_index_and_apply_or_reset
 
         ; Increase the total laps and
         ; laps for the current stage
@@ -4717,118 +4735,129 @@ accel_key_game = read_accelerate+1
 
 ;1B46
 
-; TODO
-.L1B47
-        ; Store the lookup table address in 2B (MSB) and 2C (LSB)
-        ; 
-        STX     L002B
-        STY     L002C
+; Applies or resets the current hazard set - location of
+; the hazard configuration is in the X and Y registers
+; on entry and stored in zero page
+;1B47
+.fn_apply_or_reset_hazard_set
+        ; Cache the hazard configuration address
+        STX     zp_hazard_config_lsb
+        STY     zp_hazard_config_msb
 
         ; Get the value at that address and store it in 2E
+        ; Y=0
         LDY     #$00
-        LDA     (L002B),Y
-        STA     L002E
+        LDA     (zp_hazard_config_lsb),Y
+        STA     zp_hazard_num_tiles_width
 
         ; Get the value at that address + 1 and store it in 2F
+        ; Y=1
         INY
-        LDA     (L002B),Y
-        STA     L002F
+        LDA     (zp_hazard_config_lsb),Y
+        STA     zp_hazard_num_tiles_height
 
-        ; Get the value at that address + 2 and store it in 30  
+        ; Y=2
+        ; Third value is the total number of tiles that
+        ; are used to draw the hazard e.g. 1 for ducks, 288 
         INY
-        LDA     (L002B),Y
-        STA     L0030
-.L1B5B
+        LDA     (zp_hazard_config_lsb),Y
+        STA     zp_total_tiles_for_hazard
+
         ; Y is now 3, set x = 0
+        ; y =3
         INY
         LDX     #$00
 
         ; 1C00 + 2 controls how many times around this loop
         ; Once, tracked by X
 .load_lookup_table_loop
-        ; Get the value at that address + 3 and store it in 33
-        ; Read 30 values and store in 0030 - 0060 (why are first three values different)
-        LDA     (L002B),Y
-        STA     L0033,X
-        ; Y now 4
+        ; Copy all the tile sequence from the configuration
+        ; into L0033 onwards for fast access - tile sequence
+        ; represents the tile combination needed to draw the hazard
+        LDA     (zp_hazard_config_lsb),Y
+        STA     zp_hazard_first_tile_type,X
+
+        ; Some hazards need exactly one tile (ducks) others
+        ; need many e.g. 28 (islands)
         INY
         INX
-        ; Check to see if X is greater than max value in L30 - if so loop
-        CPX     L0030
+        ; Have we cached all of the hazard tile sequence in zero
+        ; page? If not, loop back around
+        CPX     zp_total_tiles_for_hazard
         BNE     load_lookup_table_loop
 
-        ; 
-        LDA     (L002B),Y
-        STA     L0032
-        ;Y now 5
+        ; Next value is the total number of (x,y) 
+        ; instances there will be on the map
+        LDA     (zp_hazard_config_lsb),Y
+        STA     zp_total_hazard_occurrences
+
+        ; Fifth value is the total number of hazard occurrences
+        ; of this type that will be added or reset on the map
+        ;Y =5
         INY
-        ; X set to 0D
-        LDX     L0032
-.L1B6F
-        LDA     (L002B),Y
-        ; L0052 to L0045 set to (reversed though)
-        ; 32 31 2F 30 33 7F 7E 7D 7F 7E 4A 4B 4A
-        ; LSB of graphic
-        STA     L0045,X
-        ; y is now 6
+        LDX     zp_total_hazard_occurrences
+.cache_hazard_x_coordinates
+        ; Cache the x co-ordinates for the (x,y) placement
+        ; of the hazard
+        LDA     (zp_hazard_config_lsb),Y
+        STA     zp_hazard_first_x_coordinate,X
+        ; If there are more to copy then loop
         INY
         DEX
-        BPL     L1B6F
+        BPL     cache_hazard_x_coordinates
 
-        LDX     L0032
-.L1B79
-        ; L0053 to L0060 set to
-        ; 4A 4B 4A m 4B 4C 4C 4D 4C 17 18 17 15 19 26
-        ; MSB of graphic
-        LDA     (L002B),Y
-        STA     L0053,X
+        ; Reset the loop counter
+        LDX     zp_total_hazard_occurrences
+
+.cache_hazard_y_coordinates
+        ; Cache the y co-ordinates for the (x,y) placement
+        ; of the hazard
+        LDA     (zp_hazard_config_lsb),Y
+        STA     zp_hazard_first_y_coordinate,X
+        ; If there are more to copy then loop
         INY
         DEX
-        BPL     L1B79
+        BPL     cache_hazard_y_coordinates
 
-        LDX     L0032
-.L1B83
-; Calculate next hazard tile value? 
-; Storage address = (MSB00) / 2 + $3000 + LSB
-        ; Set 70 to 0 - then look at the second buffered value
-        ; Put the lowest bit as the highest bit in 0070
-        ; so 70 = $0 or $80 / 128
+        ; Reset the loop counter
+        LDX     zp_total_hazard_occurrences
+
+;L1B83
+.loop_copy_hazard_next_instance
+        ; Calculate the memory location of the
+        ; map where to store the hazard tile based
+        ; on the (x,y) co-ordinate
+        
+        ; Storage address = (y * $FF) / 2 + $3000 + x
+        ; or more simply  = $3000 + (y * 128) + x
         LDA     #$00
         STA     zp_graphics_tiles_storage_lsb
 
-; take the value we found in memory, divide it by 2
-; and add $30 / 48 to it and save in 
-; Take bit 1 and roll into 
-        LDA     L0053,X
+        ; Making y the MSB is the say as (y * $FF)
+        ; Take the value we found in memory, divide it by 2
+        ; and add $30 / 48 to it and save as the MSB
+        LDA     zp_hazard_first_y_coordinate,X
         ; Divide A by two
         LSR     A
 
-        ; Roll the carry flag in the LSB just to throw away
-        ; the carry (why not use CLC?)
+        ; Dividing MSB by 2, move the carry into the LSB
         ROR     zp_graphics_tiles_storage_lsb
-        ; add $30 to first buffered value and store in 71 (becomes 55)
-
-        ; Add $30 / 48
+        
+        ; Add $30 / 48 to the MSB (effectively adds $3000 to the address)
         ADC     #$30
 
-        ; Store result in LSB throwing away carry above
+        ; Store result in the MSB variable
         STA     zp_graphics_tiles_storage_msb
 
-        ; 4b / 2 = 25
-
+        ; Add x to the address
         LDA     zp_graphics_tiles_storage_lsb
-        ; Clear carry flag
         CLC
-        ; add first buffer value to 0 or 128 and store it back in 70
-        ADC     L0045,X
+        ADC     zp_hazard_first_x_coordinate,X
         STA     zp_graphics_tiles_storage_lsb
 
-        ; 70 is now buffer 1[x] + 128 or 0
-        ; 71 is now (buffer 2[x] / 2) + 30 = 55
-
-        ; add zero to 71 (still 55)
-
-        ; Tile address = (MSB00) / 2 + $3000 + LSB
+        ; If adding x to the LSB made it greater than
+        ; 255 (carry flag set) then add the carry to the 
+        ; MSB
         LDA     #$00
         ADC     zp_graphics_tiles_storage_msb
         STA     zp_graphics_tiles_storage_msb
@@ -4836,31 +4865,45 @@ accel_key_game = read_accelerate+1
         LDY     #$00
         TXA
         PHA
-        LDA     L002F
-        STA     L002D
-        LDX     #$00
-.L1BA7
-        LDA     #$00
-        STA     L0031
-.L1BAB
-        LDA     L0033,X
-        ; Check to see if bit 7 is positive
-        ; 2A is set to FF - top two bits are taking into overflow and zero
-        ; If some non-game state set A to 3
-        BIT     L002A
-        BPL     L1BB3
 
-        ; if negative set A to 3
+        ; Hazard is x * y bytes e.g. duck is 1 * 1 and island is 9 x 2
+        ; Copies all the x tile bytes onto the map first
+        ; then moves to the next row and copies the next x tiles to the map
+
+        ; Get the height of the hazard in number of tiles
+        ; and store it as a working counter/index
+        LDA     zp_hazard_num_tiles_height
+        STA     zp_hazard_height_index
+        LDX     #$00
+.loop_copy_hazard_next_y_row_tile_types
+        LDA     #$00
+        STA     zp_hazard_width_index
+;L1BAB
+.loop_copy_hazard_x_tile_types
+        LDA     zp_hazard_first_tile_type,X
+
+        ; Check to see if we're starting a new stage / new game 
+        ; and if we need to reset the hazards back to the water tile
+        ; (if we are then the status will be $FF)
+        BIT     zp_reset_hazards_status
+        BPL     skip_reset_to_water_tile
+
+        ; We'll reset back to the water tile ($03)
+        ; so must be start of game or stage
         LDA     #$03
-.L1BB3
+;L1BB3
+.skip_reset_to_water_tile
+        ; Copy the tile type to the map and overwrite whatever was there 
+        ; before (this either adds part of the hazard or resets it to water)
         STA     (zp_graphics_tiles_storage_lsb),Y
         INY
         INX
-        ; If there are still bytes to read copy them to the graphics storage
-        INC     L0031
-        LDA     L0031
-        CMP     L002E
-        BNE     L1BAB
+        ; If there are still horizontal / x tile types to copy
+        ; then loop around again 
+        INC     zp_hazard_width_index
+        LDA     zp_hazard_width_index
+        CMP     zp_hazard_num_tiles_width
+        BNE     loop_copy_hazard_x_tile_types
 
 
         ; Load 80 value
@@ -4869,7 +4912,7 @@ accel_key_game = read_accelerate+1
         SEC
         ; Subtract value of 2E which is one the first time
         ; so 7F is the result
-        SBC     L002E
+        SBC     zp_hazard_num_tiles_width
         CLC
         ; Add 7F to 55B2 
         ADC     zp_graphics_tiles_storage_lsb
@@ -4877,44 +4920,50 @@ accel_key_game = read_accelerate+1
         LDA     #$00
         ADC     zp_graphics_tiles_storage_msb
         STA     zp_graphics_tiles_storage_msb
-        DEC     L002D
-        LDA     L002D
-        BNE     L1BA7
+        DEC     zp_hazard_height_index
+        LDA     zp_hazard_height_index
+        BNE     loop_copy_hazard_next_y_row_tile_types
 
         PLA
         TAX
         DEX
-        BPL     L1B83
+        BPL     loop_copy_hazard_next_instance
+
 
         RTS
 
 ; 1BDB
-.fn_setup_read_lookup_table
+.fn_get_hazard_for_index_and_apply_or_reset
         ; There are 12 entries in the lookup
         ; table - this is used to find the obstacles
         ; per lap in a stage - in each stage there
         ; are more per lap
         CPX     #$0B
-        BCC     fn_read_lookup_table
+        BCC     get_hazard_for_index_from_lookup_table
 
         RTS
 
-.fn_read_lookup_table
-        LDY     lookup_table_msb,X
-        LDA     lookup_table_lsb,X
+; Find out where in memory the current lap's hazard information is
+; held - e.g. second lap has ducks
+.get_hazard_for_index_from_lookup_table
+        LDY     hazard_lookup_table_msb,X
+        LDA     hazard_lookup_table_lsb,X
         TAX
-        JMP     L1B47
+        JMP     fn_apply_or_reset_hazard_set
 
-; Look
-.lookup_table_lsb
+; The hazard lookup table gives the memory location of 
+; the hazard tile and multiple (x,y) co-ordinate 
+; configuratoin information - each pair of MSB/LSBs 
+; are a different hazard e.g. ducks and are applied cumulatively
+; for each subsequent lap 
+.hazard_lookup_table_lsb
         EQUB    $00,$21,$35,$51,$69,$81,$9A,$AE
         EQUB    $C4,$DA,$F1
 
-.lookup_table_msb
+; All hazard configuration stored at 1Cxx
+.hazard_lookup_table_msb
         EQUB    $1C,$1C,$1C,$1C,$1C,$1C,$1C,$1C
         EQUB    $1C,$1C,$1C
-
-;....
 
 INCLUDE "hazards.asm"
 
@@ -4925,8 +4974,10 @@ INCLUDE "hazards.asm"
         EQUS    $93,$FF,"  ",$FD,"  ",$FE,$A3,$A3,$FD,"  ",$A2,$A3,$A3,$FD,"  ",$FF,$9A,"   ",$87,"SCORES ",$94,$9D,$87,"HIGH ",$93,$FF,"  ",$FF,"  ",$FF,"  ",$FF,"  ",$FE,$A3,$A3,$FF,"  ",$FF,"  ",$FC," "
         EQUS    $87,"SCORES ",$94,$9D,$87,"     ",$93,$A3,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"  ",$A2,$A3,$A3,$A1,"         "
 ; 1E00
+INCLUDE "boat-graphics-formatted.asm"
 
-INCLUDE "graphics.asm"
+; 2800
+INCLUDE "tile-graphics.asm"
 ; 3000
 INCLUDE "tile-map-formatted.asm"
 

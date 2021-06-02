@@ -58,54 +58,104 @@ dummy_graphics_load_start = $8000
 graphics_buffer_start = $0A00
 mode_5_screen_centre =  $6A10
 
-; Unidentified zero page variables
-
-
-L0019   = $0019
-L001A   = $001A
-
-
-
 ; Zero page variables
+
 ; Indicates the direction the boat is facing
-; and to what degree
+; and to what degree (can get inbetween values)
 ; 0 - going fully west
-; 4 - facing fully north or south
+; 2 - going partly west
+; 4 - heading neither west or east
+; 6 - going partly east
 ; 8 - going fully east
 zp_boat_east_west_amount = $0000
 
 ; Indicates the direction the boat is facing
-; and to what degree
+; and to what degree (can get inbetween values)
 ; 0 - going fully north
-; 4 - facing fully west or east
+; 2 - going partly north
+; 4 - heading neither north or south
+; 6 - going partly south
 ; 8 - going fully south
 zp_boat_north_south_amount = $0001
-;
 
-; 
+; Compass direction that the boat is facing
+; 0  - N
+; 1  - NNE
+; 2  - NE
+; 3  - ENE
+; 4  - E
+; 5  - ESE
+; 6  - SE
+; 7  - SSE
+; 8  - S
+; 9  - SSW
+; 10 - SW
+; 11 - WSW
+; 12 - W
+; 13 - WNW
+; 14 - NW
+; 15 - NNW
 zp_boat_direction = $0002
-zp_turn_west_counter = $0003
-zp_turn_east_counter = $0004
+; Used to detect six subsequent left key events
+; before processing it to prevent the boat turning
+; too fast
+zp_turn_left_counter = $0003
+; Used to detect six subsequent right key events
+; before processing it to prevent the boat turning
+; too fast
+zp_turn_right_counter = $0004
+
+; Current speed of the boat - starts at $0A and to 
+; go faster the value decrements, fastest is zero
 zp_boat_speed = $0005
+; Used to detect six subsequent acceleration key events
+; before processing it to prevent the boat accelerating
+; too fast
 zp_acceleration_counter = $0006
+; Used to decelerate every third time around the game 
+; loop (reaches a maximum of $03)
 zp_decelerate_counter = $0007
+; Status flag used to indiciate if the boat is currently
+; aground
+; $00 - not aground
+; $FF - aground
 zp_boat_aground_status = $0008
+; Used to throttle the colour cycling when the boat has
+; run aground - only flashes every 4th time around
+; the game loop
 zp_aground_colour_cycle_counter=$0009
+; Caches the required number of System VIA CA1 interrupts
+; to wait for. One interrupt every 20 ms. Takes the value
+; from the accumulator from the caller
 zp_wait_interrupt_count = $000A
 zp_graphics_chunks_remaining = $000B
 zp_score_already_updated_status = $000C
 zp_number_for_digits_lsb = $000D 
 zp_number_for_digits_msb = $000E
+; Indicates whether the intro screen is showing
+; Set to $FF is intro screen (Jet Boat Jet Boat...)
+; is showing otherwise $00
 zp_intro_screen_status = $000F
 zp_score_lsb = $0010
 zp_score_msb = $0011
+; Stores the current lap for the current stage
+; It's zero based not one based but displayed as 
+; one based
 zp_current_lap = $0012
+; Used by the generic routine that generates
+; the number of graphics to display on the screen
+; Score will be 5 digits, Lap 2, Time 2 etc
 zp_display_digits = $0013
+; Countdown timer for the number of seconds 
+; remaining for the current lap - game ends on
+; zero. Lap time decreaes per stage
 zp_time_remaining_secs = $0014
 zp_graphics_numbers_lsb = $0015
 zp_graphics_numbers_msb = $0016
 zp_graphics_numbers_target_storage_lsb = $0017
 zp_graphics_numbers_target_storage_msb = $0018
+zp_score_update_rate_limiter   = $0019
+zp_score_max_lap_limit   = $001A
 zp_screen_target_lsb = $001B
 zp_screen_target_msb = $001C
 zp_scroll_map_steps = $001D
@@ -485,16 +535,16 @@ ORG &0B40
 
         ; Initialize variables to zero
         LDA     #$00
-        STA     zp_turn_west_counter
-        STA     zp_turn_east_counter
+        STA     zp_turn_left_counter
+        STA     zp_turn_right_counter
         STA     zp_acceleration_counter
         STA     zp_decelerate_counter
         STA     zp_score_lsb
         STA     zp_score_msb
-        STA     L0019
+        STA     zp_score_update_rate_limiter
         STA     zp_north_or_south_on_this_loop_status
         STA     zp_east_or_west_on_this_loop_status
-        STA     L001A
+        STA     zp_score_max_lap_limit
         STA     zp_checkpoint_status
         STA     zp_aground_colour_cycle_counter
         STA     zp_current_lap
@@ -511,7 +561,7 @@ ORG &0B40
         DEC     zp_time_remaining_secs
 
         ; Set 0 and 1 to the turn right counter...
-        LDA     zp_turn_east_counter
+        LDA     zp_turn_right_counter
         STA     zp_boat_east_west_amount 
         STA     zp_boat_north_south_amount
 
@@ -1846,22 +1896,29 @@ ORG &0B40
         ; during pre-game scrolling)
         BMI     update_score_return
 
-        INC     L0019
-        LDA     L0019
+        ; Only update the score every 16th time around
+        ; the game loop (about every 3 seconds when not
+        ; run aground - about every 12 seconds when you are)
+        INC     zp_score_update_rate_limiter
+        LDA     zp_score_update_rate_limiter
         CMP     #$10
         BNE     update_score_return
 
         ; Reset 19 to 0
         LDA     #$00
-        STA     L0019
+        STA     zp_score_update_rate_limiter
 
-        ; Check to see if 1A is $14 / 20
-        ; If so don't update the score
-        LDA     L001A
+        ; Only allow a maximum addition of 200 to the score
+        ; (note scores are stored divided by 10) per lap
+        ; So don't update if it's already bee updated
+        ; $14 / 20 times
+        LDA     zp_score_max_lap_limit
         CMP     #$14
         BEQ     update_score_return
 
-        INC     L001A
+        ; Update the number of times we've updated
+        ; the score this lap
+        INC     zp_score_max_lap_limit
 
         ; Add $01 to the current score LSB
         CLC
@@ -1869,7 +1926,7 @@ ORG &0B40
         ADC     #$01
         STA     zp_score_lsb
         ; Check if the carry is set - if so increment 
-        ; the MSB
+        ; the MSB otherwise redraw it now
         BCC     redraw_score
 
         ; Add 1 to the MSB
@@ -2378,8 +2435,8 @@ left_key_game = read_left_key+1
         ; Detects left key press 6 times in a row
         ; before doing anything - so we don't turn too
         ; fast
-        INC     zp_turn_west_counter
-        LDA     zp_turn_west_counter
+        INC     zp_turn_left_counter
+        LDA     zp_turn_left_counter
 
         ; If the we haven't detected left 6 times
         ; do nothing (branch ahead)        
@@ -2388,7 +2445,7 @@ left_key_game = read_left_key+1
 
         ; Reset the left key detection 
         LDA     #$00
-        STA     zp_turn_west_counter
+        STA     zp_turn_left_counter
 
         ; Increment the left counter
         LDA     zp_boat_direction
@@ -2427,8 +2484,8 @@ right_key_game = read_right_key+1
         ; Detects right key press 6 times in a row
         ; before doing anything - so we don't turn too
         ; fast
-        INC     zp_turn_east_counter
-        LDA     zp_turn_east_counter
+        INC     zp_turn_right_counter
+        LDA     zp_turn_right_counter
 
         ; If the we haven't detected right 6 times
         ; do nothing (branch ahead)            
@@ -2437,7 +2494,7 @@ right_key_game = read_right_key+1
 
         ; Reset the right key detection 
         LDA     #$00
-        STA     zp_turn_east_counter
+        STA     zp_turn_right_counter
 
         ; Maximum value is 16 (assume rotation by 360/16 = 27)
         ; as it's a 4-bit counter. Effectively decrements
@@ -2475,8 +2532,6 @@ accel_key_game = read_accelerate+1
         ; Detects acceleration 6 times in a row
         ; before doing anything - so we don't accelerate too
         ; fast
-        ; TODO Are 05 and 06 both boat speed?
-        ; Is 6 acceleration?
         INC     zp_acceleration_counter
         LDA     zp_acceleration_counter
 
@@ -2487,7 +2542,8 @@ accel_key_game = read_accelerate+1
 
         ; Set the acceleration to zero
         ; So we don't do the next increment of
-        ; speed until we have detected 
+        ; speed until we have detected the key press
+        ; again six times
         LDA     #$00
         STA     zp_acceleration_counter
 
@@ -3606,8 +3662,8 @@ accel_key_game = read_accelerate+1
         STA     zp_checkpoint_status
 
 
-        STA     L001A
-        STA     L0019
+        STA     zp_score_max_lap_limit
+        STA     zp_score_update_rate_limiter
 
         ; Stop any maskable interrupts and
         ; Add the time to the score plus display it

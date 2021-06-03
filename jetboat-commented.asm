@@ -5193,7 +5193,9 @@ INCLUDE "tile-map-formatted.asm"
 
 .main_code_block_end
 
-
+; Code was compiled above in its runtime position $0B40
+; Now need to move it to $1100 where it will load before it
+; is relocated back to $0B40
 load = $1100
 main_code_block_load = load
 relocate_code_block_load = main_code_block_load + (main_code_block_end - main_code_block)

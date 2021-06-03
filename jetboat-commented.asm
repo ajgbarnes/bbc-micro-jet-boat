@@ -1,11 +1,11 @@
-; zero page - variables
-; 0400 - 04A0 - copied stuff
-; 0540 - 05E0 - copied stuff
-; 0740 - 07E0 - copied stuff
-; 04A0 - 
-; 0B40 - 
+; Disassembly and annotation of Jet Boat from Software Invasion
+; 
+; Originally written by Robin J. Leatherbrow (c) Copyright 1984
+;
+; Disassembly labels and comments by Andy Barnes (c) Copyright 2021
+;
 
-; From basic loader:
+; Evelopes from basic loader:
 ;ENVELOPE 1,  1,70,16,2,2,0,0,126, 0,0,-126,110,110
 ;ENVELOPE 2,129, 2, 0,0,0,0,0, 40,-8,0,  -2,126, 45
 ;ENVELOPE 3,129, 1,-1,0,0,0,0,  0, 0,0,   0,  0,  0
@@ -16,32 +16,13 @@
 ; timer_poke+1  =4
 ; ?&1605=4 or after load before execution ?&1BC5=4 
 
-; Open or close a file
-OSFIND = $FFCE
-; Load or save a block of memory to a file 	
-OSGBPB = $FFD1
-; Save a single byte to file from A
-OSBPUT = $FFD4 
-; Load a single byte to A from file
-OSBGET = $FFD7
-; Load or save data about a file
-OSARGS = $FFDA
-; Load or save a complete file
-OSFILE = $FFDD
-; Read character (from keyboard) to A
-OSRDCH = $FFE0 
-; Write a character (to screen) from A plus LF if (A)=&0D
-OSASCI = $FFE3
-; Write LF,CR (&0A,&0D) to screen 
-OSNEWL = $FFE7
+
 ; Write character (to screen) from A
 OSWRCH = $FFEE
 ; Perfrom miscellaneous OS opferation using control block to pass parameters
 OSWORD = $FFF1
 ; Perfrom miscellaneous OS operation using registers to pass parameters
 OSBYTE = $FFF4
-; Interpret the command line given 
-OSCLI = $FFF7
 
 SHEILA_6845_address=$FE00
 SHEILA_6845_data=$FE01
@@ -96,10 +77,12 @@ zp_boat_north_south_amount = $0001
 ; 14 - NW
 ; 15 - NNW
 zp_boat_direction = $0002
+
 ; Used to detect six subsequent left key events
 ; before processing it to prevent the boat turning
 ; too fast
 zp_turn_left_counter = $0003
+
 ; Used to detect six subsequent right key events
 ; before processing it to prevent the boat turning
 ; too fast
@@ -108,97 +91,232 @@ zp_turn_right_counter = $0004
 ; Current speed of the boat - starts at $0A and to 
 ; go faster the value decrements, fastest is zero
 zp_boat_speed = $0005
+
 ; Used to detect six subsequent acceleration key events
 ; before processing it to prevent the boat accelerating
 ; too fast
 zp_acceleration_counter = $0006
+
 ; Used to decelerate every third time around the game 
 ; loop (reaches a maximum of $03)
 zp_decelerate_counter = $0007
+
 ; Status flag used to indiciate if the boat is currently
 ; aground
 ; $00 - not aground
 ; $FF - aground
 zp_boat_aground_status = $0008
+
 ; Used to throttle the colour cycling when the boat has
 ; run aground - only flashes every 4th time around
 ; the game loop
 zp_aground_colour_cycle_counter=$0009
+
 ; Caches the required number of System VIA CA1 interrupts
 ; to wait for. One interrupt every 20 ms. Takes the value
 ; from the accumulator from the caller
 zp_wait_interrupt_count = $000A
+
+; Number of "chunks" remianing to copy into the 
+; offscreen buffer of the clock or boat
 zp_graphics_chunks_remaining = $000B
+
+; Flag to indicate whether the score has already been 
+; updated this game loop - gets updated when the 
+; screen cycles when aground as well as in the game loop so
+; only update once
 zp_score_already_updated_status = $000C
+
+; Used to hold the value that needs to be converted into
+; individual graphic digits e.g. score or lap or time remaining
 zp_number_for_digits_lsb = $000D 
 zp_number_for_digits_msb = $000E
+
 ; Indicates whether the intro screen is showing
 ; Set to $FF is intro screen (Jet Boat Jet Boat...)
 ; is showing otherwise $00
 zp_intro_screen_status = $000F
+
+; Holds the current score - note this on screen
+; it is suffixed with an extra 0
 zp_score_lsb = $0010
 zp_score_msb = $0011
+
 ; Stores the current lap for the current stage
 ; It's zero based not one based but displayed as 
 ; one based
 zp_current_lap = $0012
+
 ; Used by the generic routine that generates
 ; the number of graphics to display on the screen
 ; Score will be 5 digits, Lap 2, Time 2 etc
 zp_display_digits = $0013
+
 ; Countdown timer for the number of seconds 
 ; remaining for the current lap - game ends on
 ; zero. Lap time decreaes per stage
 zp_time_remaining_secs = $0014
+
+; Where the graphics 0 - 9 are held in memory
 zp_graphics_numbers_lsb = $0015
 zp_graphics_numbers_msb = $0016
+
+; Offscreen buffer for the digits generated to be
+; put on screen later
 zp_graphics_numbers_target_storage_lsb = $0017
 zp_graphics_numbers_target_storage_msb = $0018
+
+; Limits the rate that the score updates to n game loops
 zp_score_update_rate_limiter   = $0019
+
+; Maximum score increment per lap (excluding time bonus)
 zp_score_max_lap_limit   = $001A
-zp_screen_target_lsb = $001B
-zp_screen_target_msb = $001C
+
+; Address of the centre of the screen - used to place
+; the boat and the start / times up clock - constantly
+; recalculated as the screen scrolls
+zp_screen_centre_lsb = $001B
+zp_screen_centre_msb = $001C
+
+; Number of horizintal bytes to scroll the jet boat or next
+; stage screen to fully show the map - set to 40 / $27 because
+; it's mode 5
 zp_scroll_map_steps = $001D
+
+; Flag to indicate if the boat has been through the 
+; checkpoint half way around the map - new lap won't start
+; unless this is set
 zp_checkpoint_status = $001F
+
+; Players position in the high score table - working
+; variable just used to find where to put the player's score
+; and name
 zp_high_score_position = $0020
+
+; Used to display the high score names and to allow
+; the player to enter their name (where it gets written)
 zp_high_score_name_lsb = $0021
 zp_high_score_name_msb = $0022
+
+; Used to stop the score being updated when the jet boat or 
+; new stage text is on the screen and scrolling off
 zp_pre_game_scrolling_status = $0023
+
+; Used as a flag to indicate if a scroll down or up should happen 
+; during this game loop - if the boat isn't facing fully down or up
+; i.e. only partially then this is used to only scroll / move down or up
+; every other game loop
 zp_north_or_south_on_this_loop_status   = $0024
+
+; Used as a flag to indicate if a scroll left or right should happen 
+; during this game loop - if the boat isn't facing fully left or right
+; i.e. only partially then this is used to only scroll / move left or right
+; every other game loop
 zp_east_or_west_on_this_loop_status   = $0025
+
+; Set to the location of the get ready, times up or boat graphic
+; and generic routine called to draw that item in the middle of the
+; screen
 zp_graphics_source_lsb = $0026
 zp_graphics_source_msb = $0027
+
+; At the start of a new game or stage, this is used to 
+; indicate that the hazard tiles should be reset to water tiles
+; on the map
 zp_reset_hazards_status = $002A
+
+; Holds the location in memory of the current hazard configuration set
 zp_hazard_config_lsb   = $002B
 zp_hazard_config_msb   = $002C
+
+; Working index used to add all the hazard tile rows to the map
+; Gets initially set to zp_hazard_num_tiles_height and then decremented
 zp_hazard_height_index   = $002D
+
+; Width (in tiles) of the current hazard
 zp_hazard_num_tiles_width   = $002E
+
+; Height (in tiles) of the current hazard
 zp_hazard_num_tiles_height   = $002F
+
+; Used to copy all the tiles from the configuration in normal
+; memory into zero page memory - used as a max in the copying loop
 zp_total_tiles_for_hazard   = $0030
+
+; Working index used to add all the hazard tiles on the current 
+; hazard row to the map e.g. islands are 9 tiles wide so have to copy
+; 9 tiles to the map
+; Gets initially set to zp_hazard_num_tiles_width and then decremented
 zp_hazard_width_index   = $0031
+
+; How many of this hazard need to be added to the map
 zp_total_hazard_occurrences   = $0032
+
+; Cache of the current hazard's tile types
 zp_hazard_first_tile_type   = $0033
+
+; Cache of the current hazard's (x,y) co-ordinates
+; Can have up to 14 instances - copied from the 
+; normal memory configuration
 zp_hazard_first_x_coordinate   = $0045
 zp_hazard_first_y_coordinate   = $0053
+
+; Used to colour the Jet Boat text at the start
+; of a new game - alternates between red and yellow
 zp_text_colour = $0061
+
+; Which stage the player is currently on
 zp_current_stage = $0062
+
+; Which lap in the current stage the player is on
 zp_laps_for_current_stage = $0063
+
+; Indicates if all the laps in the the current
+; stage have been completed
+; $00 not complete
+; $FF complete
 zp_stage_completed_status = $0064
+
+; Based on the direction that the boat is facing
+; this is used to determine which function to call to 
+; adjust the speed and direction to move - lookup
+; table called and function address cached here
 zp_addr_fn_boat_direction_lsb =  $0065
 zp_addr_fn_boat_direction_msb =  $0066
+
+; Used for two purposes - where to copy the tile graphics onto the
+; screen and also where on the map in memory to update the tile type
+; for a hazard
 zp_graphics_tiles_storage_lsb = $0070
 zp_graphics_tiles_storage_msb = $0071
+
+; Used to store working values for memory addresses
 zp_general_purpose_lsb = $0072
 zp_general_purpose_msb = $0073
+
+; Centre point of the map on the screen 
+; Defaults to (x) $75 (y) $0B
 zp_map_pos_x = $0074
 zp_map_pos_y = $0075
+
+; Stores the low byte of the screen start address
+; that has been divided by 8    
 zp_screen_start_div_8_lsb = $0076
+
+; Position of the boat on the screen in (x,y) map co-ordinates
 zp_boat_xpos = $0077
 zp_boat_ypos = $0078
+
+; Depending on the direction the boat is facing, these
+; flags are set to the scroll the screen in the right
+; direction
 zp_scroll_east_status = $0079
 zp_scroll_west_status = $007A
 zp_scroll_north_status = $007B
 zp_scroll_south_status = $007C
+
+; Screen start address - used in the 6845 R12,R13
+; for hardware scrolling
 zp_screen_start_msb = $007E
 zp_screen_start_lsb = $007D
 
@@ -207,7 +325,8 @@ break_intercept_jmp_vector = $0287
 break_intercept_lsb_vector = $0288
 break_intercept_msb_vector = $0289
 
-
+; Used to relocate the game and graphics when the game 
+; first loads
 copy_from_lsb = $0000
 copy_from_msb = $0001
 copy_to_lsb = $0002
@@ -215,14 +334,21 @@ copy_to_msb = $0003
 copy_size = $0004
 copy_num_pages = $0005
 
+; Where in memory the BASIC loader puts the 
+; key INKEY values
 left_key_value = $7BC0
 right_key_value = $7BC1
 accel_key_value = $7BC2
+
+; Where in memory the BASIC loader puts the 
+; key descriptions
 left_key_string_from_loader = $7BD0
 right_key_string_from_loader = $7BE0
 accel_key_string_from_loader = $7BF0
 
-
+; Main game code executes at $0B40 onwards
+; Compile here and move later to where it gets loaded above 
+; $1100
 ORG &0B40
 
 .main_code_block
@@ -613,11 +739,12 @@ ORG &0B40
         LDA     #$58
         STA     zp_screen_start_msb
 
-        ; Store the vdu parameter block address in 1B and 1C
+        ; Store the centre of the screen as the write
+        ; target for the clock
         LDA     #LO(mode_5_screen_centre)
-        STA     zp_screen_target_lsb
+        STA     zp_screen_centre_lsb
         LDA     #HI(mode_5_screen_centre)
-        STA     zp_screen_target_msb
+        STA     zp_screen_centre_msb
 
         ; Set the statuses that the screen is scrolling
         ; right and that it's the intro screen
@@ -725,7 +852,7 @@ ORG &0B40
 
         ; Map will be scrolled onto the screen 
         ; using 40 steps (including 0) - this is because
-        ; in Mode 5 there are 40 columns of bytes
+        ; in Mode 5 there are 40 / $27 columns of bytes
         LDA     #$27
         STA     zp_scroll_map_steps
 
@@ -1050,7 +1177,7 @@ ORG &0B40
 .skip_boat_ypos_decrement
         STA     zp_map_pos_y
 
-        ; Set the boat position to the map position
+        ; Set the map position to the boat position
         LDA     zp_boat_xpos
         STA     zp_map_pos_x
         
@@ -1959,9 +2086,9 @@ ORG &0B40
 
         ; Get the target screen address for the get ready
         ; icon and use that as the copy to target
-        LDA     zp_screen_target_lsb
+        LDA     zp_screen_centre_lsb
         STA     zp_graphics_tiles_storage_lsb
-        LDA     zp_screen_target_msb
+        LDA     zp_screen_centre_msb
         STA     zp_graphics_tiles_storage_msb
 
         ; Clock is made of 3 chunks
@@ -2135,20 +2262,20 @@ ORG &0B40
 
         ; Add 8 bytes to the screen start address
         ; to scroll the right edge of the screen
-        LDA     zp_screen_target_lsb
+        LDA     zp_screen_centre_lsb
         CLC
         ADC     #$08
-        STA     zp_screen_target_lsb
+        STA     zp_screen_centre_lsb
         BCC     check_scroll_left
 
         ; Add the carry to the MSB
-        LDA     zp_screen_target_msb
+        LDA     zp_screen_centre_msb
         ADC     #$00
 
         ; Check it hasn't gone over $7FFF
         ; and handle it if it has
         JSR     fn_check_screen_start_address
-        STA     zp_screen_target_msb
+        STA     zp_screen_centre_msb
 
 .check_scroll_left
         ; Check for scroll left
@@ -2157,19 +2284,19 @@ ORG &0B40
 
         ; Subtract 8 bytes to the screen start address
         ; to scroll the left edge of the screen
-        LDA     zp_screen_target_lsb
+        LDA     zp_screen_centre_lsb
         SEC
         SBC     #$08
-        STA     zp_screen_target_lsb
+        STA     zp_screen_centre_lsb
         BCS     check_scroll_vertical
 
-        LDA     zp_screen_target_msb
+        LDA     zp_screen_centre_msb
         SBC     #$00
         ; Check it hasn't gone under $5800
         ; and handle it if it has
         JSR     fn_check_screen_start_address
 
-        STA     zp_screen_target_msb
+        STA     zp_screen_centre_msb
 
 .check_scroll_vertical
         ; If both scroll up and down are set then
@@ -2184,17 +2311,17 @@ ORG &0B40
 
         ; Subtract $140 bytes to the screen start address
         ; to scroll up (the top edge of the screen)
-        LDA     zp_screen_target_lsb
+        LDA     zp_screen_centre_lsb
         SEC
         SBC     #$40
-        STA     zp_screen_target_lsb
-        LDA     zp_screen_target_msb
+        STA     zp_screen_centre_lsb
+        LDA     zp_screen_centre_msb
         SBC     #$01
 
         ; Check it hasn't gone under $5800
         ; and handle it if it has
         JSR     fn_check_screen_start_address
-        STA     zp_screen_target_msb
+        STA     zp_screen_centre_msb
 
 .check_scroll_down
         ; Scroll for scroll down (bottom of screen)
@@ -2203,17 +2330,17 @@ ORG &0B40
 
         ; Add $140 bytes to the screen start address
         ; to scroll down (the bottom edge of the screen)
-        LDA     zp_screen_target_lsb
+        LDA     zp_screen_centre_lsb
         CLC
         ADC     #$40
-        STA     zp_screen_target_lsb
-        LDA     zp_screen_target_msb
+        STA     zp_screen_centre_lsb
+        LDA     zp_screen_centre_msb
         ADC     #$01
 
         ; Check it hasn't gone over $7FFF
         ; and handle it if it has
         JSR     fn_check_screen_start_address
-        STA     zp_screen_target_msb
+        STA     zp_screen_centre_msb
 
 .set_boat_rotation_graphic
         ; Set the source graphic location for the boat
@@ -2288,9 +2415,9 @@ ORG &0B40
 
         ; Copy the target screen address to our working
         ; variables
-        LDA     zp_screen_target_lsb
+        LDA     zp_screen_centre_lsb
         STA     zp_graphics_tiles_storage_lsb
-        LDA     zp_screen_target_msb
+        LDA     zp_screen_centre_msb
         STA     zp_graphics_tiles_storage_msb
 
         ; A boat is made of three graphic "chunks"
@@ -4155,7 +4282,7 @@ accel_key_game = read_accelerate+1
 
 .high_scores_demoted
         ; Write the player's score into the 
-        ; write part of the high score array
+        ; right part of the high score array
         LDA     zp_score_lsb
         STA     high_score_lsb,X
         LDA     zp_score_msb
@@ -4791,22 +4918,24 @@ accel_key_game = read_accelerate+1
 
 ;1B46
 
-; Applies or resets the current hazard set - location of
-; the hazard configuration is in the X and Y registers
-; on entry and stored in zero page
+
 ;1B47
 .fn_apply_or_reset_hazard_set
+        ; Applies or resets the current hazard set - location of
+        ; the hazard configuration is in the X and Y registers
+        ; on entry and stored in zero page
+
         ; Cache the hazard configuration address
         STX     zp_hazard_config_lsb
         STY     zp_hazard_config_msb
 
-        ; Get the value at that address and store it in 2E
+        ; Width of hazard in (number of tiles wide)
         ; Y=0
         LDY     #$00
         LDA     (zp_hazard_config_lsb),Y
         STA     zp_hazard_num_tiles_width
 
-        ; Get the value at that address + 1 and store it in 2F
+        ; Height of hazard in (number of tiles high)
         ; Y=1
         INY
         LDA     (zp_hazard_config_lsb),Y
@@ -4814,7 +4943,8 @@ accel_key_game = read_accelerate+1
 
         ; Y=2
         ; Third value is the total number of tiles that
-        ; are used to draw the hazard e.g. 1 for ducks, 288 
+        ; are used to draw the hazard e.g. 1 for ducks, 4 
+        ; for buoys - should equal width x height about
         INY
         LDA     (zp_hazard_config_lsb),Y
         STA     zp_total_tiles_for_hazard
@@ -5013,15 +5143,39 @@ accel_key_game = read_accelerate+1
 ; are a different hazard e.g. ducks and are applied cumulatively
 ; for each subsequent lap 
 .hazard_lookup_table_lsb
-        EQUB    $00,$21,$35,$51,$69,$81,$9A,$AE
-        EQUB    $C4,$DA,$F1
+        EQUB    LO(hazard_ducks)
+        EQUB    LO(hazard_buoys)
+        EQUB    LO(hazard_islands)
+        EQUB    LO(hazard_sea_serpents)
+        EQUB    LO(hazard_barriers)
+        EQUB    LO(hazard_yachts)
+        EQUB    LO(hazard_crocodiles)
+        EQUB    LO(hazard_sand_banks)
+        EQUB    LO(hazard_gondolas)
+        EQUB    LO(hazard_rafts)
+        EQUB    LO(hazard_lighthouses)
+
+;        EQUB    $00,$21,$35,$51,$69,$81,$9A,$AE
+;        EQUB    $C4,$DA,$F1
 
 ; All hazard configuration stored at 1Cxx
 .hazard_lookup_table_msb
-        EQUB    $1C,$1C,$1C,$1C,$1C,$1C,$1C,$1C
-        EQUB    $1C,$1C,$1C
+        EQUB    HI(hazard_ducks)
+        EQUB    HI(hazard_buoys)
+        EQUB    HI(hazard_islands)
+        EQUB    HI(hazard_sea_serpents)
+        EQUB    HI(hazard_barriers)
+        EQUB    HI(hazard_yachts)
+        EQUB    HI(hazard_crocodiles)
+        EQUB    HI(hazard_sand_banks)
+        EQUB    HI(hazard_gondolas)
+        EQUB    HI(hazard_rafts)
+        EQUB    HI(hazard_lighthouses)        
 
-INCLUDE "hazards.asm"
+;        EQUB    $1C,$1C,$1C,$1C,$1C,$1C,$1C,$1C
+;        EQUB    $1C,$1C,$1C
+
+INCLUDE "hazards-formatted.asm"
 
 ; 1D10
 .high_score_screen
@@ -5229,7 +5383,7 @@ ORG relocate_code_block_load
 .copy_key_control_values
 	; Get the keyboard control values that the basic loader set
 	; and insert them into the game code - this is done after
-                ; the code is moved
+        ; the code is moved
         LDA     left_key_value
         STA     left_key_game
         LDA     right_key_value

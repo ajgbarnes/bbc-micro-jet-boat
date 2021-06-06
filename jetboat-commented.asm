@@ -3673,8 +3673,7 @@ accel_key_game = read_accelerate+1
         ; time decrementing - change to e.g.$04 and it will
         ; never decrement
 .timer_poke
-        ; TODO Change this back to 05
-        CMP     #$04
+        CMP     #$05
         BNE     set_timer_64ms_end
 
         ; Preserve Accumulator, X and Y on the stack
@@ -5015,7 +5014,7 @@ accel_key_game = read_accelerate+1
         ; on the (x,y) co-ordinate
         
         ; Storage address = (y * $FF) / 2 + $3000 + x
-        ; or more simply  = $3000 + (y * 128) + x
+        ; or more simply  =nj
         LDA     #$00
         STA     zp_graphics_tiles_storage_lsb
 

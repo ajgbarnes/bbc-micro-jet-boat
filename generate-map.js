@@ -7,7 +7,7 @@ const { isRegExp } = require('util');
 // Width of the canvas is 128 x co-ordinates by 4 pixels
 // And 80 y-co-oridinates of 8-bytes per tile
 // So it's 512 x 640 in total
-const width = 128*4;
+const width = 128*8;
 const height = 80*8;
 
 // Define the colour rgb / transparency values
@@ -192,7 +192,7 @@ fs.readFile('jetboa1', (err, data) => {
     // For a given canvas x,y position work out where in the
     // canvas buffer that will be
     function getPixelPosition(writex,writey,width) {
-        let position = writey * (width * 4) + writex * 4;
+        let position = writey * (width * 4) + writex * 8;
         return position;
     }
 
@@ -245,7 +245,12 @@ fs.readFile('jetboa1', (err, data) => {
             // Loop through all the x co-ordinates in the (x,y) on the map
             for(let x=0; x< 128; x++) {
                 // Find the tile type for the current (x,y) position
-                tileType = getTileType(x,y)
+                tileType = getTileType(x,y);
+
+                if(y == 0x4B && x == 0x32) {
+                    tileType = 0x68;
+                }               
+
                 // Find the tile type data (8 bytes) in the file
                 tileAddress = getTileAddress(tileType);
 
@@ -254,6 +259,7 @@ fs.readFile('jetboa1', (err, data) => {
                 // tileSet just shows me which tile type numbers were used
                 tileArray[x][y]=tileType;
                 tileSet.add(tileType);
+
 
                 // Loop over each of the 8 bytes for the tile type
                 // Pull out the individual pixesl for each (4 pixels per byte)
@@ -288,6 +294,11 @@ fs.readFile('jetboa1', (err, data) => {
                         pixels[pixelLocation+2]=  currentColour[2]; // blue
                         pixels[pixelLocation+3]=  currentColour[3];
 
+                        pixels[pixelLocation+4]=  currentColour[0];  // red
+                        pixels[pixelLocation+5]=  currentColour[1];  // green
+                        pixels[pixelLocation+6]=  currentColour[2]; // blue
+                        pixels[pixelLocation+7]=  currentColour[3];                        
+
                         // Rotate right the pixel mask to get the next pixel from the
                         // the byte (up to 4)
                         pixelMask = pixelMask >>> 1;
@@ -301,8 +312,15 @@ fs.readFile('jetboa1', (err, data) => {
         const imageBuffer = canvas.toBuffer('image/png');
         fs.writeFileSync('./jetboat-map-scheme-'+colourScheme+'.png', imageBuffer);
 
-        //console.log(Array.from(tileSet).sort((a,b)=>a-b));
+        console.log(Array.from(tileSet).sort((a,b)=>a-b));
         //console.log(tileArray);
+        /*
+        console.log(tileArray[123][0].toString(16));
+        console.log(tileArray[124][0].toString(16));
+        console.log(tileArray[125][0].toString(16));
+        console.log(tileArray[126][0].toString(16));
+        console.log(tileArray[127][0].toString(16));
+        */
         //console.log(tileArray[0x1d][0x0b]);
     } // colourScheme
 });

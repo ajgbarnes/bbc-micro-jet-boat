@@ -605,7 +605,6 @@ ORG &0B40
 .fn_break_handler
         ; Check to see if the CTRL key was also pressed
         LDX     #$FE
-        ; TODO - does the break key or ctrl break set the interrupt flag?
         CLI
         JSR     fn_read_key
 
@@ -628,7 +627,7 @@ ORG &0B40
 .here
         JMP     here
 
-;0BF8
+;0BF8   
 .fn_game_start
         ; Reset the stack pointer (start "clean")
         LDX     #$FF
@@ -867,8 +866,7 @@ ORG &0B40
         STA     zp_scroll_north_status
         STA     zp_score_already_updated_status
 
-        ; TODO LOOKING (Big function)
-        ; Is this where it draws the map and scrolls into view
+        ; Scroll the screen into view one step
         JSR     fn_scroll_screen_and_update
 
         ; Wait for 60 ms before scrolling into view again
@@ -899,6 +897,7 @@ ORG &0B40
         STA     zp_graphics_source_msb
 
         ; Show the Get Ready icon
+        ; ANDY VALIDATED
         JSR     fn_toggle_boat_or_time_graphic
 
         ; Pause for 2 seconds (show icon for 2 seconds)
@@ -909,7 +908,7 @@ ORG &0B40
 
         JSR     fn_enable_interval_timer  
 
-        ; What is 14.... 
+        ; Add a second to the remaining seconds
         INC     zp_time_remaining_secs
 
         ; Start the timer that changes the on screen
@@ -942,7 +941,7 @@ ORG &0B40
         JSR     fn_copy_time_score_lap_to_screen
 
         ; Remove the boat from the screen
-        JSR     fn_toggle_boat_on_screen
+        JSR     fn_toggle_boat_on_screen 
 
         ; Set the source graphics buffer to be
         ; $0400 where the times up graphic is off screen
@@ -953,6 +952,7 @@ ORG &0B40
         STA     zp_graphics_source_msb
         
         ; Show the times up icon
+        ; ANDY VALIDATED
         JSR     fn_toggle_boat_or_time_graphic
 
         ; Flush the buffer for sound channel 0
@@ -2079,13 +2079,15 @@ ORG &0B40
         ; Get the source buffer for the get ready
         ; icon (where it's already been cached)
         ; and use that as the copy from source
+        ; later on here.
         LDA     zp_graphics_source_lsb
         STA     source_get_ready_graphic_buffer + 1
         LDA     zp_graphics_source_msb
         STA     source_get_ready_graphic_buffer + 2
 
         ; Get the target screen address for the get ready
-        ; icon and use that as the copy to target
+        ; icon and use that as the copy to target - always
+        ; written to the centre of the screen
         LDA     zp_screen_centre_lsb
         STA     zp_graphics_tiles_storage_lsb
         LDA     zp_screen_centre_msb
@@ -2104,7 +2106,9 @@ ORG &0B40
         LDY     #$07
 .source_get_ready_graphic_buffer
 .loop_copy_get_ready_byte
-        ; Load the next byte
+        ; Load the next byte from the graphic buffer 
+        ; (dummy_screen_start replaced at runtime with
+        ; a source graphics buffer e.g. times up icon source)
         LDA     dummy_screen_start,Y
 
         ; If it's just transparent then skip
@@ -2121,31 +2125,46 @@ ORG &0B40
         LDA     (zp_graphics_tiles_storage_lsb),Y
         BEQ     write_get_ready_byte_to_screen
 
-        ; Cache the source graphic address
+        ; Cache the source graphic address (these values
+        ; haven't changed though since they were written the other
+        ; way around)
         LDA     source_get_ready_graphic_buffer + 1
         STA     zp_general_purpose_lsb
         LDA     source_get_ready_graphic_buffer + 2
         STA     zp_general_purpose_msb
 
-        ; EOR the graphic with what's currently on the
-        ; screen and stick it back on the stack
+        ; EOR the graphic we want to write to the screen
+        ;  with what's currently on the screen and 
+        ; stick it back on the stack (it'll get written if it's 
+        ; different)
         PLA
         EOR     (zp_graphics_tiles_storage_lsb),Y
         PHA
 
+        ; Collision detection routine - check to see if the
+        ; 
         ; If the graphic that is going to be written to
         ; the screen is the same as the source graphic
-        ; after it's been EOR'd then branch ahead
-        ; and check if it's the same as what's already
-        ; on screen
+        ; after it's been EOR'd then branch ahead or
+        ; the source graphic is just water (0x00000000)
         AND     (zp_general_purpose_lsb),Y
         CMP     (zp_general_purpose_lsb),Y
         BEQ     check_same_as_target
-
+; 1. Load source graphic
+; 2. Check if source graphic is 0 - if so just write 
+; it to the screen as it's water and will blat whatever is there
+; 3. Otherwise, get what's on the screen already
+; 4. EOR the on-screen byte with what we're going to write there
+; 5. If the result is of the EOR ANDed with the source byte is zero,
+; then it's unchanged so no collision - just write it to the screen to
+; blat whatever is there
+; 6. Otherwise set the run aground flag 
         ; TODO Don't know what zp_boat_aground_status is...
         ; Set some flag... 
         ; And always branch (as it's always negative)
         ; Different graphic?
+        ; ANDY TODO
+        ; LDA     #$FF
         LDA     #$FF
         STA     zp_boat_aground_status
         BMI     write_get_ready_byte_to_screen
@@ -2164,7 +2183,9 @@ ORG &0B40
         BEQ     write_get_ready_byte_to_screen
 
         ; TODO different graphic?
-        LDA     #$FF
+        ; ANDY TODO
+        ; LDA     #$FF
+        LDA     #$ff
         STA     zp_boat_aground_status
 
 ;L114B
@@ -2350,8 +2371,8 @@ ORG &0B40
         STA     zp_graphics_source_lsb
         LDA     boat_graphic_location_msb,X
         STA     zp_graphics_source_msb
+        ; Write it to the screen
         JSR     fn_toggle_boat_or_time_graphic
-
 
         ; Has the boat run aground? If so we need to
         ; colour cycle the screen every 4th time
@@ -2530,8 +2551,8 @@ ORG &0B40
         ; Wait 20ms
         JSR     fn_wait_20_ms
 
-        ; Remove the Get Ready icon
-        ; And remove the boat? 
+        ; Remove the Get Ready icon or boat (whatever was there)
+        ; ANDY VALIDATED
         JSR     fn_toggle_boat_or_time_graphic
 
         ; Check to see if the joystick
@@ -3189,7 +3210,8 @@ accel_key_game = read_accelerate+1
         ; When the boat has run aground, colour cycle
         ; the palette
 
-        ; TODO Reset something to 4...
+        ; Reset the colour cycle counter to 4 (this routine
+        ; is only called when it counts down to 0)
         LDA     #$04
         STA     zp_aground_colour_cycle_counter
 
@@ -3736,7 +3758,7 @@ accel_key_game = read_accelerate+1
 
 ; 1633
 .fn_enable_interval_timer
-        ; Disable interval timer crossing 0 event
+        ; Enable interval timer crossing 0 event
         ; timer increments every centisecond
         LDA     #$0E
         LDX     #$05
@@ -3994,11 +4016,13 @@ accel_key_game = read_accelerate+1
         ; Interval timer increments every centisecond
         JSR     fn_enable_interval_timer
 
-        ; TODO - Give this a variable name
+        ; Add a second back (guess it's being kind)
         INC     zp_time_remaining_secs
-        ; TODO - Some state flag for the main loop?
+        ; If the accumulator is set to anything other than
+        ; 5 the time will NOT decrement.  Testing artefact
+        ; and/or cheat poke
         LDA     #$05
-        ; TODO - Main game loop?
+        ; Start the on screen timer coutdown
         JSR     fn_set_timer_64ms
 
 .check_freeze_keys_end
@@ -4485,7 +4509,9 @@ accel_key_game = read_accelerate+1
 
 ;L18B2
 .fn_enter_high_score
-        ; TODO SOMETHING WITH KEYBOARD BUFFER
+        ; Switch on CAPS LOCK 
+        ; OSBYTE &CA - Read/write keyboard status
+        ; Same as *FX 2020,160
         LDA     #$CA    
         LDX     #$A0
         LDY     #$00

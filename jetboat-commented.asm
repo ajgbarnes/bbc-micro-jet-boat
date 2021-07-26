@@ -1969,7 +1969,7 @@ ORG &0B40
         PHA
 
         ; Parameter block address specified in X (LSB) / Y (MSB)
-        ; Performs a VDU 12 / OSBYTE &0C to change the 
+        ; Performs a VDU 19 / OSBYTE &0C to change the 
         ; Logical to physical colour mapping for one colour
         LDX     #colour_palette_block MOD 256
         LDY     #colour_palette_block DIV 256

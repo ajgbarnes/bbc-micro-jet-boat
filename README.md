@@ -37,6 +37,11 @@ Note that when it compiles the binary is *byte identical* to the original.
 
 Hope you can learn something from this disassembly and it inspires a project. 
 
+Things to do:
+- Revisit some of the code comments now I know more
+- Add the lap times to the README.md
+- Transfer the memory map from Excel into markdown
+
 # Generating the map
 
 I wrote a node.js script to inspect the BBC Micro binary and generate the map from it. To run it, install [node.js](https://nodejs.org/en/download/).  I used 14.17.0 to develop this.  Then:
@@ -46,6 +51,8 @@ I wrote a node.js script to inspect the BBC Micro binary and generate the map fr
 3. Run the script using **node generate-map.js** (in the Powershell on windows you'll have to use node ./generate-map.js)
 4. Open the generated jetboat-map.png image file
 5. Enjoy!
+
+There are four levels each with different colours as below.  Each level has 11 laps with increasing hazards per lap.  The lap times also reduce per level per lap until it becomes impossible to complete.
 
 ![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-scheme-all.png "Jet Boat Map - All Colour Schemes Tessellated")
 

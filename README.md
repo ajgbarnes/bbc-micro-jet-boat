@@ -49,6 +49,96 @@ I wrote a node.js script to inspect the BBC Micro binary and generate the map fr
 
 ![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-scheme-all.png "Jet Boat Map - All Colour Schemes Tessellated")
 
+# Generating the stage hazards
+
+
+I wrote a node.js script to inspect the BBC Micro binary and generate the map for each lap with the additional hazards on each. To run it, install [node.js](https://nodejs.org/en/download/).  I used 14.17.0 to develop this.  Then:
+
+1. Ensure the Jet Boat binary is available and named **jetboa1** - it should NOT be in an SSD
+2. Run **npm install canvas** - I might get around to putting in a package.json if I need more libraries
+3. Run the script using **node generate-map-with-hazards.js** (in the Powershell on windows you'll have to use node ./generate-map-with-hazards.js)
+4. Open the generated jetboat-maplap-n.png image files (where n is 0 to 10)
+5. Enjoy!
+
+## Lap 1 - Standard ducks, boats and rocks
+
+By default:
+
+- 2 boats
+- 14 ducks
+- 8 rocks
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-0.png "Jet Boat Map - Lap 1")
+
+## Lap 2 - Buoys
+
+Addition of:
+- 6 buoys
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-1.png "Jet Boat Map - Lap 2")
+
+## Lap 3 - Islands
+
+Addition of:
+- 3 islands
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-2.png "Jet Boat Map - Lap 3")
+
+## Lap 4 - Channel Markers
+
+Addition of:
+- 9 channel markers (some in pairs)
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-3.png "Jet Boat Map - Lap 4")
+
+## Lap 5 - Sea Monsters
+
+Addition of:
+- 3 sea monsters
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-4.png "Jet Boat Map - Lap 5")
+
+## Lap 6 - Yachts
+
+Addition of:
+- 6 yachts
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-5.png "Jet Boat Map - Lap 6")
+
+## Lap 7 - Crocodiles
+
+Addition of:
+- 6 crocodiles
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-6.png "Jet Boat Map - Lap 7")
+
+## Lap 8 - Sandbanks
+
+Addition of:
+- 5 sandbacks
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-7.png "Jet Boat Map - Lap 8")
+
+## Lap 9 - Lighthouses
+
+Addition of:
+- 5 lighthouses
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-8.png "Jet Boat Map - Lap 9")
+
+## Lap 10 - Wooden Rafts
+
+Addition of:
+- 5 wooden rafts
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-9.png "Jet Boat Map - Lap 10")
+
+## Lap 11 - Gondolas
+
+Addition of:
+- 6 gondolas
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-10.png "Jet Boat Map - Lap 11")
 
 
 Andy Barnes

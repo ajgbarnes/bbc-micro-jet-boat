@@ -91,17 +91,18 @@ Addition of:
 
 ![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-2.png "Jet Boat Map - Lap 3")
 
-## Lap 4 - Channel Markers
+## Lap 4 - Sea Monsters
+
+Addition of:
+- 3 sea monsters
+
+![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-3.png "Jet Boat Map - Lap 4")
+
+## Lap 5 - Channel Markers
 
 Addition of:
 - 9 channel markers (some in pairs)
 
-![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-3.png "Jet Boat Map - Lap 4")
-
-## Lap 5 - Sea Monsters
-
-Addition of:
-- 3 sea monsters
 
 ![alt text](https://github.com/ajgbarnes/bbc-micro-jet-boat/blob/main/jetboat-map-lap-4.png "Jet Boat Map - Lap 5")
 

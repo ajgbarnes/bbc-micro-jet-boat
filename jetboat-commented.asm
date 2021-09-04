@@ -349,7 +349,7 @@ SHEILA_6845_DATA=$FE01
 SYS_VIA_INT_REGISTER = $FE4D
 
 ;System VIA Interrupt Enable Register
-writemSYS_VIA_INT_ENABLE = $FE4E
+SYS_VIA_INT_ENABLE = $FE4E
 
 ; VDU Variable for current screen mode
 VDU_CURRENT_SCREEN_MODE = $0355
@@ -1575,13 +1575,13 @@ ORG &0B40
         ; If the boat is at position $50 or greater reset it 
         ; as the screen will wrap around
         CMP     #$50
-        BNE     skip_boat_ypos_reset
+        BNE     skip_boat_ypos_reset2
 
         ; Reset the boat position
         LDA     #$00
         STA     zp_boat_ypos
 
-.skip_boat_ypos_reset
+.skip_boat_ypos_reset2
         ; Calculates the address of the start of the
         ; bottom row of the screen by subtracting
         ; the length of a row off of the top left
@@ -5904,13 +5904,11 @@ COPYBLOCK main_code_block, main_code_block_end, main_code_block_load
 ORG relocate_code_block_load
 ;5DC0
 .relocate_code_block
+
+.fn_copy_memory
         ; ----------------------------------------------------------------------------------------
         ; Relocate the game code and graphics
         ; ----------------------------------------------------------------------------------------
-
-	; First time through, var 6 will always
-	; be 0 so will go to L5DD4
-.fn_copy_memory
         LDY     #$00  ; Set y to zero for later memory copy loops 
         LDX     copy_num_pages  ; Check if we're copying full pages or less than a page
         BEQ     init_copy_memory ;
@@ -5951,6 +5949,9 @@ ORG relocate_code_block_load
 
 ;5DE1
 .fn_start_point
+        ; ----------------------------------------------------------------------------------------
+        ; On load, code execution point
+        ; ----------------------------------------------------------------------------------------
         ; Set the mode to MODE 7
         LDA     #$16    
         JSR     OSWRCH
@@ -5985,9 +5986,9 @@ ORG relocate_code_block_load
         LDA     #$00
         STA     copy_to_lsb
         STA     copy_num_pages
-        LDA     #graphics_times_up_clock MOD 256
+        LDA     #LO(graphics_times_up_clock)
         STA     copy_from_lsb
-        LDA     #graphics_times_up_clock DIV 256
+        LDA     #HI(graphics_times_up_clock)
         STA     copy_from_msb
         LDA     #$04
         STA     copy_to_msb
@@ -6002,9 +6003,9 @@ ORG relocate_code_block_load
 	; copy_size = $A0 bytes (unchanged)
         LDA     #$40
         STA     copy_to_lsb
-        LDA     #graphics_icons MOD 256
+        LDA     #LO(graphics_icons)
         STA     copy_from_lsb
-        LDA     #graphics_icons DIV 256
+        LDA     #HI(graphics_icons)
         STA     copy_from_msb
         LDA     #$05
         STA     copy_to_msb
@@ -6017,9 +6018,9 @@ ORG relocate_code_block_load
 	; copy_size = $A0 bytes (unchanged)
         LDA     #$40
         STA     copy_to_lsb
-        LDA     #graphics_numbers MOD 256
+        LDA     #LO(graphics_numbers)
         STA     copy_from_lsb
-        LDA     #graphics_numbers DIV 256
+        LDA     #HI(graphics_numbers)
         STA     copy_from_msb
         LDA     #$07
         STA     copy_to_msb
@@ -6030,9 +6031,9 @@ ORG relocate_code_block_load
 	; copy_from = &64B0  (to &654F)
 	; copy_to   = &04A0  Basic Workspace
 	; copy_size = $A0 bytes (unchanged)		
-        LDA     #graphics_get_ready_icon MOD 256
+        LDA     #LO(graphics_get_ready_icon)
         STA     copy_from_lsb
-        LDA     #graphics_get_ready_icon DIV 256
+        LDA     #HI(graphics_get_ready_icon)
         STA     copy_from_msb
         LDA     #$A0
         STA     copy_to_lsb
@@ -6337,4 +6338,4 @@ ORG relocate_code_block_load
 .relocate_block_end
 
      
-SAVE "Jetboa1", load, relocate_block_end, start_point
+SAVE "Jetboa1", load, relocate_block_end, fn_start_point

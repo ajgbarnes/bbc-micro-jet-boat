@@ -4,39 +4,378 @@
 ;
 ; Disassembly labels and comments by Andy Barnes (c) Copyright 2021
 ;
+; Twitter @ajgbarnes
+
+; Notes on the game
+; =================
+;
+; Code
+; ----
+; - Relocation code is from fn_start_point ($5DE1) onwards (all thrown away when game starts)
+; - Main game entry code is at fn_game_start ($0BF8)
+; - Main game loop is at main_game_loop ($0D16)
+;
+; Timers
+; ------
+; - "Interval timer crossing 0" used to decrement time remaining every 64 centiseconds
+; - Pauses achieved by using the System VIA CA1 interrupts to wait 20ms * n
+;   (where n is the multiplier to give the required wait time e.g. 100 for 2 seconds)
+;
+; Screen
+; ------
+; - Intro screen(s) and high score screens are in MODE 7
+; - Main game runs in MODE 5 with default configuration
+; - Screen start address is $5800 and end address $7FFF
+; - Screen is scrolled using the 6845 CRTC video controller (R12,R13)
+;
+; Game
+; ----
+; - There are no baddies - the only thing that moves around the map is the boat
+; - Boat runs slower when it runs aground (doesn't get damaged)
+; - Boat always appears in the centre of the screen and the screen scrolls around it
+; - Boat can move in 16 compass directions and has a graphic for each
+; - No other icon is animated (other than during colour cycling)
+;
+; Stages/Laps
+; -----------
+; - There are 13 stages in the game 
+; - Each new stage is a different colour (from one of four possible palettes)
+; - Each new stage reduces the time available to complete a lap
+; - Each stage is 11 laps - all having the same stage completion time
+; - Each new lap adds additional hazards
+; - The 14th stage has a zero time to complete so you automatically die
+; - To complete a lap you must cross both a checkpoint in the centre of the map
+;   and also a lap marker
+; - Centre checkpoint is satisfied for boat position (x,y) if 94<= x <110 and y= 14
+; - Lap    checkpoint is satisfied for boat position (x,y) if 24<= x <37 and  y= 12
+; - Centre checkpoint stops you cutting across the map or just looping back
+; - "Prepare to enter the next stage" is shown between stages instead of the 
+;   repeating Jetboat text at the start of the game
+; - Lap times as stored are auto decremented by 1 before the game properly starts
+; - Stage Lap times are therefore 
+;   -> 70, 60, 51, 46, 41, 38, 36, 33, 31, 28, 26, 23, 21, 0
+;
+; Controls
+; --------
+; - Regardless of how you start the game, both joystick and keyboard inputs are checked
+; - Keyboard is read using OSBYTE &81 rather than directly
+; - Joystick x/y axis read via the ADC chip using OSBYTE &80
+; - Joystick button read via the System VIA using OSBYTE &80
+;
+; Map
+; ---
+; - Map is 128 (x-axis) x 80 (y-tiles) tiles
+; - Map is stored from $3000 and serialised by row
+; - Each map position identifies a tile id
+;
+; Tiles
+; -----
+; - There are 256 ($00-$FF) possible different tile types
+; - Each map tile is 8 bytes (4 pixels wide and 8 pixels high)
+; - Tiles are stored sequentially at $2800 to $2FFF
+; - Tile source graphics can be looked up using $2800 + (tile id * 8)
+;
+; Boat Graphics
+; -------------
+; - There are sixteen full boat sprites
+; - One boat sprite for each point on the compass (N, NNW, W, WNW...)
+; - Boat is EOR'd on and off the screen
+; - Graphics are stored from $1E00 to $2FFF
+; - In MDOE 5 a screen byte is 4 pixels wide
+; - In MDOE 5 a screen byte is 1 pixel high
+; - A boat sprite is 5 bytes wide
+; - A boat sprite is 3 x 8 bytes high = 24 bytes high
+; - A boat sprite is (5 x 24)  = 120 bytes in total 
+; - A boat sprite is therefore (5 x 4)   20  pixels wide
+; - A boat sprite is therefore (24 x 1)  24  pixels high
+; - A boat sprite is therefore (24 x 20) 480 pixels in total
+; - Boat sprites are stored from $1E00 to $27FF
+; - Each boat sprite is 120 ($A0) bytes
+; - Lookup table at boat_graphic_location_lsb/msb gives memory location for compass point
+; - Boat moves speed is from $0A (slowest) to $00 (fastest), used also as duration for second
+;   "put" sound so useful to have it in this order
+;
+; Other Graphics
+; --------------
+; - Get Ready sprite is shown in the same position as the boat 
+; - Get Ready sprite is stored in $04A0 - $053F (relocated there when the game loads)
+; - Get Ready sprite is the same size as the boat
+; - Times Up! sprite is shown in the same position as the boat
+; - Times Up! sprite is stored in $0400 - %04BF (relocated there when the game loads)
+; - Times Up! sprite is the same size as the boat
+;
+; Movement
+; --------
+; - Compass direction that boat is facing determines speed and direction
+; - Lookup table used to lookup compass direction of boat against speed/movement
+; - Lookup table is at lookup_table_boat_direction_fns with each fn underneath
+; - Each function determines how much up/down or left/right movement there should be
+; - NNW wouldn't move W as fast as WNW as an example but faster N than WNW
+; - N would have zero E or W movement but maximum N movement
+; - E would have zero N or S movement but maximum E movement
+; - Boat decelerates every third game loop
+;
+; Collision Detection
+; -------------------
+; - Flashing when run aground is achieved by colour cycling the logical/physical colours
+; - Colour resets every 4th time around game loop
+; - Boat is immediately slowed to slowest speed ($0A)
+; - Logical colour 3 is cycled through the colours at palette_colour_cycle 
+; - Colour only changed and sound played every fourth time around the game loop
+; - Magic happens in fn_toggle_boat_or_time_graphic
+; - Tile to be written is EOR'd with what's already there and compared to original tile
+;   If it's the same, then no collision, if it's different then collision flag set
+;   Water is 0x00000000 so won't affect the EOR
+;   Blank tiles are not compared (ones with byte values of $00)
+;
+; Time remaining
+; --------------
+; - Time remaining is in 0.64 second units 
+; - Time remaining is decremented using the "interval timer crossing 0" timer
+; - "Interval timer crossing 0" event is processed by setting the EVNTV vector to custom handler
+; - Custom handler checks the event time is "Interval timer crossing 0" ($05) before doing anything
+; - Interval timer is always set to 64 centiseconds (to decrement remaining time)
+; - Interval timer is switched off when game not playing
+; - Interval timer switched back on when game begins (after Jetboat repeating text has scrolled away)
+; 
+; Hazards
+; -------
+; - Hazards are cumulative per stage lap (reset on new stage)
+; - Hazards are stored in memory as described in hazards-formatted.asm but as a summary:
+; - <# tiles wide>,<# tiles high>,<1st tile id>,<2nd tile id>...<nth tile id>,<instances>,<x0>,<x1>...<x>,<y0><y1>...<yn>
+; - Hazard configuration for each hazard type is stored $1C00 to $1D0F
+; - There a lookup table into this Hazard configuration for each configuration type
+; - Hazard lookup table for each lap is held in hazard_lookup_table_lsb/msb
+; - Hazards update the map to contain replace water with the hazard tiles
+; 
+; Game Colours
+; ------------
+; - Bottom two bits of the stage number drive the palette colours
+; - Four different colour schemes to choose from, used in rotation 
+; - Colour schemes stored at colour_bank_1/2/3
+; - Logical colour 0 is always blue
+; 
+; Sounds
+; ------
+; - Boat makes a 'put-put' sound - duration is inversely proportional to boat speed
+;   This is played on Channel 0 and set in fn_play_boat_sounds (two consecutive sounds)
+; - Times up sound sounds like an alarm clock and uses Envelope 1 on Channel 1
+;   (see check_time_remaining)
+; - Completed lap sound is like a short hornpipe tune using Envelope 2 on Channel 2
+;   (see completed_lap_next_sound)
+; - Boat aground sound is two sounds and envelopes
+;   (see sound_boat_aground_first/second)
+;
+; Score
+; -----
+; - Score is updates every 16th time around the game loop (for just being alive)
+; - Score can only be updated to a maximum of 2,000 per lap
+; - On lap completion, remaining time is added to the score (time * 10)
+
+; Runtime Memory Map
+; ------------------
+; From  To      Bytes   Type            Description
+;
+; 0400	049F	159	Graphics	Load time times Up Clock Graphic
+; 04A0	053F	159	Graphics	Load time Get Ready Graphic
+; 0540	0567	39	Graphics	Score graphic
+; 0568	0587	31	Graphics	Time graphic
+; 0588	5A7	31	Graphics	Lap graphic
+; 05A8	05AF	7	Graphics	Blank graphic
+; 05B0	05E0	48	Unused		
+; 05E0
+; 0600	073F	319	Graphics	Map tile buffer for row
+; 0740	07E0	160	Graphics	0-9 number graphics
+; 0800	08FF	511	Unused	        OS SOUND workspace	
+; 0900	09FF	255	Graphics	Map tile buffer for column
+; 0A00	0A07	7	Graphics	Blank spacer
+; 0A08	0A27	31	Graphics	Runtime copy of time graphic
+; 0A28	0A47	31	Graphics	Blank spacer
+; 0A48	0A4F	7	Graphics	Runtime copy of the blank graphic
+; 0A68	0A8F	39	Graphics	Score icon
+; 0A90	0ADF	79	Graphics	Blank spacer (never written to)
+; 0AE0	0AF7	23	Graphics	Blank spacer (never written to)
+; 0AF8	0B17	31	Graphics	Runtime copy of lap graphic
+; 0B18	0B37	31	Graphics	Blank spacer (never written to)
+; 0B38	0B3F	7	Graphics	Runtime copy of the blank graphic
+; 0B40	1DFF	4288	Code            Main game code (see below)
+; 1C00	1D0F	272	Data	        Hazards data
+; 1D10	1DFF	240	Data 	        high_score_screen
+; 1E00	27FF	2560	Graphics        Boat graphics
+; 2800	2FFF	2048	Graphics        Tile graphics
+; 3000	57FF	10240	Data	        Map (co-ordinates to tile id)
+; 5800	7FFF	10240	Screen	        Mode 5 screen memory
+;
+; Relocated Game Code Sub-routine Reference
+; -----------------------------------------
+;
+; Once relocated, the main entry point is fn_game_start
+; 
+; From  To      Bytes   Sub-routine name
+;
+; 0B40	0B6C	45	fn_write_y_tiles_to_off_screen_buffer
+; 0B6D	0B7B	15	fn_check_screen_start_address
+; 0B7C	0BAB	48	fn_get_xy_tile_graphic_address
+; 0BAC	0BDC	49	fn_write_x_tiles_to_off_screen_buffer
+; 0BDD	0BF7	27	fn_break_handler
+; 0BF8	0D90	409	fn_game_start
+; 0D91	0D97	7	fn_read_key
+; 0D98	0EBA	291	fn_scroll_screen_and_update
+; 0EBB	0EDB	33	fn_set_6845_screen_start_address
+; 0EDC	0EEB	16	fn_wait_20_ms
+; 0EEC	0F2E	67	fn_copy_tile_column_to_screen
+; 0F2F	0F3B	13	fn_check_joystick_left
+; 0F3C	0F4C	17	fn_check_joystick_right
+; 0F4D	0F5A	14	fn_check_joystick_button
+; 0F5B	1013	185	fn_copy_tile_row_to_screen
+; 1014	101D	10	fn_wait_for_n_interrupts
+; 101E	1067	74	fn_copy_time_score_lap_to_screen_to_screen
+; 1068	107F	24	fn_hide_cursor
+; 1080	10B5	54	fn_set_game_colours
+; 10B6	10C3	14	fn_change_colour_palette
+; 10C4	10C7	4	colour_bank_1
+; 10C8	10CB	4	colour_bank_2
+; 10CC	10CF	4	colour_bank_3
+; 10D0	10D4	5	colour_palette_block
+; 10D5	10FB	39	fn_update_score
+; 10FC	117F	132	fn_toggle_get_ready_icon
+; 118A	120E	133	fn_screen_scroll_rotate_boat_flash_screen
+; 120F	122E	32	boat_graphic_location lookup
+; 122F	128C	94	fn_toggle_boat_on_screen
+; 128D	1307	123	fn_check_keys_and_joystick
+; 1308	1319	18	fn_calc_boat_direction_of_motion
+; 131A	132F	22	lookup_table_boat_direction_fns
+; 133A	138F	86	fn_boat_direction_N/NNE/NE/ENE/E/ESE/SE/SSE/S/SSW/SW/WSW/W/WNW/NW/NNW
+; 139A	13A1	8	fn_accelerate_south
+; 13A2	13A9	8	fn_move_to_half_south
+; 13AA	13B1	8	fn_accelerate_east
+; 13B2	13B9	8	fn_move_to_half_east
+; 13BA	13C1	8	fn_accelerate_north
+; 13C2	13C9	8	fn_move_to_half_north
+; 13CA	13D1	8	fn_accelerate_west
+; 13D2	13D9	8	fn_move_to_half_west
+; 13DA	13E5	12	fn_adjust_east_west_for_full_north_or_south
+; 13E6	13EF	10	fn_adjust_north_south_for_full_east_or_west
+; 13F0	1411	37	Utility functions for above
+; 1412	1414	3	Unused
+; 1415	1450	60	fn_check_if_moving_up_or_down
+; 1451	148C	60	fn_check_if_moving_left_or_right
+; 148D	14E6	90	fn_colour_cycle_screen
+; 14E7	14EE	8	sound_boat_aground_first
+; 14EF	14F6	8	sound_boat_aground_second
+; 14F7	14FE	8	palette_colour_cycle
+; 14FF	1543	69	fn_init_graphics_buffers
+; 1543	15AB	105	fn_calc_digits_for_display
+; 15AC	15B7	12	fn_print_high_score_numbers
+; 15B8	15DD	38	fn_draw_current_score
+; 15DE	15F1	20	fn_draw_lap_counter
+; 15F2	1602	17	fn_draw_time_counter
+; 1603	1625	35	fn_set_timer_64ms
+; 1626	162A	5	var_int_timer_value
+; 162B	1632	8	sound_times_up
+; 1633	163B	9	fn_enable_interval_timer
+; 163C	1644	9	fn_disable_interval_timer
+; 1645	16AC	104	fn_check_checkpoint_or_lap_complete
+; 16AD	16BA	14	lap_times
+; 16BB	16CD	19	fn_scroll_screen_up
+; 16CE	16F2	37	fn_check_sound_keys
+; 16F3	171E	44	fn_check_freeze_continue_keys
+; 171F	174F	49	fn_add_time_to_score_and_display
+; 1750	1754	5	pitch_table_completed_lap
+; 1755	1759	5	duration_table_completed_lap
+; 175A	1761	8	sound_completed_lap
+; 1762	177B	26	fn_play_boat_sounds
+; 177C	1783	8	sound_boat_move_first
+; 1784	178B	8	sound_boat_move_second
+; 178C	1796	11	duration_lookup_sound_table
+; 1797	181E	136	fn_did_score_make_high_score_table
+; 181F	18B1	147	fn_display_high_score_table
+; 18B2	191E	109	fn_enter_high_score
+; 191F	192C	14	fn_show_cursor
+; 192D	1936	10	vdu_23_show_cursor_params
+; 1937	193E	8	high_score_lsb
+; 193F	1946	8	high_score_msb
+; 1947	194E	8	high_score_name_lsb
+; 194F	1956	8	high_score_name_msb
+; 1957	19F7	161	high_score_names
+; 19F8	1A2C	53	fn_display_press_space
+; 1A2D	1A3E	18	fn_wait_for_intro_input
+; 1A3F	1A6C	46	fn_show_player_score_below_high_scores
+; 1A6D	1A8B	31	string_press_space_or_fire
+; 1A8C	1AA4	25	string_enter_name 
+; 1AA5	1AB0	12	string_you_scored
+; 1AB1	1ADC	44	fn_fill_screen_with_jet_boat
+; 1ADD	1AE3	7	jet_boat_string
+; 1AE4	1AF4	17	fn_set_colours_to_black
+; 1AF5	1B02	14	fn_print_next_stage_text
+; 1B03	1B46	68	string_next_stage
+; 1B47	1BDA	148	fn_apply_or_reset_hazard_set
+; 1BDB	1BE9	15	fn_setup_read_lookup_table
+; 1BEA	1BF4	11	hazard_lookup_table_lsb
+; 1BF5	1BFF	11	hazard_lookup_table_msb
+; 1C00	1D0F	272	Hazards data
+; 1D10	1DFF	240	high_score_screen
+;
+; Interesting pokes 
+; =================
+; - Stop screen time decrementing
+;       Set timer_poke+1 to a high value to ignore all events
+;       e.g. ?&1603=&FF
+; 
+
 
 ; Evelopes from basic loader:
-;ENVELOPE 1,  1,70,16,2,2,0,0,126, 0,0,-126,110,110
-;ENVELOPE 2,129, 2, 0,0,0,0,0, 40,-8,0,  -2,126, 45
-;ENVELOPE 3,129, 1,-1,0,0,0,0,  0, 0,0,   0,  0,  0
+; ENVELOPE 1,  1,70,16,2,2,0,0,126, 0,0,-126,110,110
+; ENVELOPE 2,129, 2, 0,0,0,0,0, 40,-8,0,  -2,126, 45
+; ENVELOPE 3,129, 1,-1,0,0,0,0,  0, 0,0,   0,  0,  0
 
 ; OSWRCH uses VDU values
 
-; Interesting pokes 
-; timer_poke+1  =4
-; ?&1605=4 or after load before execution ?&1BC5=4 
-
-
-; Write character (to screen) from A
+; Write character (to screen) from Accumulator
 OSWRCH = $FFEE
+
 ; Perfrom miscellaneous OS opferation using control block to pass parameters
 OSWORD = $FFF1
+
 ; Perfrom miscellaneous OS operation using registers to pass parameters
 OSBYTE = $FFF4
 
-SHEILA_6845_address=$FE00
-SHEILA_6845_data=$FE01
+; Address of the memory mapped hardware
+; for the 6845 CRTC video controller
+SHEILA_6845_ADDRESS=$FE00
+SHEILA_6845_DATA=$FE01
 
+;System VIA Interrupt Flag Register
 SYS_VIA_INT_REGISTER = $FE4D
-SYS_VIA_INT_ENABLE = $FE4E
 
+;System VIA Interrupt Enable Register
+writemSYS_VIA_INT_ENABLE = $FE4E
+
+; VDU Variable for current screen mode
 VDU_CURRENT_SCREEN_MODE = $0355
-eventv_lsb_vector = $0220
-eventv_msb_vector = $0221
+
+; Event vector for handling the interval
+; timing crossing zero events
+evntv_lsb_vector = $0220
+evntv_msb_vector = $0221
+
+; Start of the mode 7 screen memory address
 mode7_start_addr = $7C00
+
+; Dummy screen start address that is changed 
+; programatically in the LDA/STAs but defaults
+; to this value at load
 dummy_screen_start = $8000
+
+; Dummy graphics start address that is changed 
+; programatically in the LDA/STAs but defaults
+; to this value at load
 dummy_graphics_load_start = $8000
+
+; Screen graphics buffer (from $0A00 to $0B3F)
 graphics_buffer_start = $0A00
+
+; Unscrolled default memory address of the centre of the screen
 mode_5_screen_centre =  $6A10
 
 ; Zero page variables
@@ -152,7 +491,7 @@ zp_current_lap = $0012
 ; Score will be 5 digits, Lap 2, Time 2 etc
 zp_display_digits = $0013
 
-; Countdown timer for the number of seconds 
+; Countdown timer for the number of time units (0.64 seconds) 
 ; remaining for the current lap - game ends on
 ; zero. Lap time decreaes per stage
 zp_time_remaining_secs = $0014
@@ -335,13 +674,13 @@ copy_size = $0004
 copy_num_pages = $0005
 
 ; Where in memory the BASIC loader puts the 
-; key INKEY values
+; user selectd keyboard control INKEY values
 left_key_value = $7BC0
 right_key_value = $7BC1
 accel_key_value = $7BC2
 
 ; Where in memory the BASIC loader puts the 
-; key descriptions
+; user selected keyboard control descriptions
 left_key_string_from_loader = $7BD0
 right_key_string_from_loader = $7BE0
 accel_key_string_from_loader = $7BF0
@@ -352,12 +691,14 @@ accel_key_string_from_loader = $7BF0
 ORG &0B40
 
 .main_code_block
-;L0B40
+;0B40
 .fn_write_y_tiles_to_off_screen_buffer
+        ; ---------------------------------------------------------
         ; Gets a vertical column of tile graphics and
         ; puts them in the off screen buffer (to either)
         ; scroll east or west - they are not written to the screen
         ; here
+        ; ---------------------------------------------------------
 
         ; Define the off screen buffer where we'll
         ; assemble the right tile graphics for a new column
@@ -370,20 +711,21 @@ ORG &0B40
         ; 32 tiles are required (one for each row in the column)
         LDX     #$1F
 
-;L0B4A        
+;0B4A        
 .loop_get_next_y_tile
         ; Get the memory address of the nth tile's
         ; source graphic
         JSR     fn_get_xy_tile_graphic_address
-.L0B4D
-        ; Copy all 8 bytes of the graphic
+
+        ; Copy all 8 bytes of the graphic...
         LDY     #$07
 
 .loop_next_tile_byte
-        ; to the off screen buffer
+        ; ...to the off screen buffer
         LDA     (zp_general_purpose_lsb),Y
         STA     (zp_graphics_tiles_storage_lsb),Y
         DEY
+
         ; If there are still some bytes left to copy
         ; loop around
         BPL     loop_next_tile_byte
@@ -400,7 +742,7 @@ ORG &0B40
         INC     zp_map_pos_y
         LDA     zp_map_pos_y
 
-        ; The y position can only go up to $50 / 80
+        ; The y position can only go up to $4F / 79
         CMP     #$50
         BNE     get_next_tile
 
@@ -409,8 +751,9 @@ ORG &0B40
         ; to $50 / 80
         LDA     #$00
         STA     zp_map_pos_y
+
 .get_next_tile
-        ; Do we still have some of the 32 tiles to get?
+        ; Do we still have some of the ($1F) 32 tiles to get?
         DEX
         BPL     loop_get_next_y_tile
 
@@ -418,16 +761,21 @@ ORG &0B40
 
 ; L0B6D
 .fn_check_screen_start_address
+        ; ---------------------------------------------------------
+        ; Check that the screen start address is between
+        ; $5800 and $7FFF and, if not, adjust it
+        ; ---------------------------------------------------------
+
         ; When scrolling down,
-        ; if the screen start address is > $8000
-        ; then we need to loop it back to $5800
+        ; if the screen start address is > $7FFF
+        ; then we need to wrap it back to $5800
         ; which is achieved by subtracting $2800
         CMP     #$80
         BCS     reset_screen_to_start
 
         ; When scrolling up,
         ; if the screen start address is < $5800
-        ; then we need to loop it back to $8000
+        ; then we need to wrap it back to $8000
         ; which is achieved by adding $2800
         CMP     #$58
         BCC     reset_screen_to_end
@@ -444,19 +792,21 @@ ORG &0B40
         ADC     #$28
         RTS
 
-;L0B7C
+;0B7C
 .fn_get_xy_tile_graphic_address
+        ; ---------------------------------------------------------
         ; This routine is called with an (x,y) tile coordinates 
-        ; stored in zero page.
+        ; stored in zero page zp_map_pos_x/zp_map_pos_y
         ; 
         ; This routine does two key things:
         ; 1. Works out the tile type for the (x,y)
         ; 2. Looks up where the tile graphic data is held in memory;; 
         ;
-        ; All the tile ty-pe data for all (x,y) coordinates is held
+        ; All the tile type data for all (x,y) coordinates is held
         ; starting at $3000.  
+        ;
         ;       0 =< x < 128
-        ;       0 =< y < 80-
+        ;       0 =< y < 80
         ; 
         ; So 128 tiles across the map
         ; So 80 tiles down the map
@@ -464,6 +814,8 @@ ORG &0B40
         ; Simple algorithm for (x,y) tile type lookup
         ; 
         ;    Tile type memory address = $3000 + (y * 128) + x
+        ;       or
+        ;    Code does this = $3000 + ($y00 / 2) + x
         ;
         ; So first x row (y=0)  is stored $3000 to $307F
         ; Next x row     (y=1)  is stored $3080 to $30FF
@@ -471,9 +823,9 @@ ORG &0B40
         ; Last x row     (y=80) is stored $5780 to $57FF
         ;
         ; This is then used to look up the tile graphic
+        ; ---------------------------------------------------------
 
-        ; Treats y as $x00 and divides by 2
-        ; and adds x
+        ; Treats y as $y00 and divides by 2 and adds x
         LDA     zp_map_pos_y
         LSR     A
         STA     zp_general_purpose_msb
@@ -487,7 +839,7 @@ ORG &0B40
         BCS     increment_tile_lookup_msb
 
 .get_tile_type_and_graphic_address
-        ; Effectively add $3000 to the address
+        ; Add $3000 to the address
         LDA     #$30
         ADC     zp_general_purpose_msb
         STA     zp_general_purpose_msb
@@ -529,16 +881,20 @@ ORG &0B40
         RTS
 
 .increment_tile_lookup_msb
+        ; Move to the next page of memory
         INC     zp_general_purpose_msb
+
         ; Carry can never be set here, this just ends the function
         BCC     get_tile_type_and_graphic_address 
     
-;L0BAC
+;0BAC
 .fn_write_x_tiles_to_off_screen_buffer
+        ; ---------------------------------------------------------
         ; Gets a horizontal row of tile graphics and
         ; puts them in the off screen buffer (to either)
         ; scroll up or down - they are not written to the screen
         ; here
+        ; ---------------------------------------------------------
         
         ; Set the Tile graphic off screen buffer - $0600
         ; This is used for rows of tiles only
@@ -552,13 +908,16 @@ ORG &0B40
         LDX     #$27
 .loop_get_next_x_tile
         ; Find the source address for the tile
-        ; Ths is going to be copied into the off
-        ; screen buffer
+        ; The tile graphics at this address 
+        ; are going to be copied into the off
+        ; screen buffer - address will be held
+        ; in zp_general_pupose_lsb/msb
         JSR     fn_get_xy_tile_graphic_address
 
         ; MODE 5 screen is blocks of 8 bytes per x/y
         ; position 
         LDY     #$07
+
 .loop_copy_map_tile_block
         ; Load the first map tile (it's 8 bytes)
         ; and store it in the graphic buffer storage
@@ -583,7 +942,7 @@ ORG &0B40
         ADC     #$00
         STA     zp_graphics_tiles_storage_msb
 
-        ; y axis only goes to 128 so if we reach 
+        ; x axis only goes to 128 so if we reach 
         ; 128 we need to reset to zero
         INC     zp_map_pos_x
         BIT     zp_map_pos_x
@@ -603,6 +962,13 @@ ORG &0B40
 
 ; 0BDD
 .fn_break_handler
+        ; ---------------------------------------------------------
+        ; Break intercept vector routine - although NEVER
+        ; called in the game because the JMP vector is set to
+        ; $00 and not $4C - also fn_game_start performs
+        ; a *FX 200,3 which clears memory on break
+        ; ---------------------------------------------------------
+        ; 
         ; Check to see if the CTRL key was also pressed
         LDX     #$FE
         CLI
@@ -623,18 +989,38 @@ ORG &0B40
         JSR     OSBYTE
 
 ;0BF5
-        ; Looks like an infinite loop?
-.here
-        JMP     here
+        ; Hang on break with an infinite loop
+.break_infinite_loop
+        JMP     break_infinite_loop     
 
 ;0BF8   
 .fn_game_start
+        ; --------------------------------------------
+        ; Main entry point after relocation and intro
+        ; screen shown - called from the
+        ; relocation/intro code
+        ; --------------------------------------------
+
         ; Reset the stack pointer (start "clean")
         LDX     #$FF
         TXS
         
         ; Set the Break intercept vector to JMP to 
-        ; the game's break handler
+        ; the game's break handler - never executed
+        ; as the break_intercept_jmp_vector is set
+        ; to $00 and NOT to a JMP ($4C) instruction
+        ; 
+        ; MOS will only use this vector if it's set 
+        ; to $4C
+        ;
+        ; To play with this - also need to change 
+        ; the LDX #$03 to LDX #$00 to change the
+        ; *FX 200,3 to *FX 200,0 to stop memory
+        ; being cleared on break
+        ;
+        ; Maybe this was a quick way to restart a level
+        ; for testing by the developer and removed when
+        ; published
         LDA     #$00
         STA     break_intercept_jmp_vector
         LDA     #LO(fn_break_handler)
@@ -643,6 +1029,11 @@ ORG &0B40
         STA     break_intercept_msb_vector
 
 .restart_game
+        ; --------------------------------------------
+        ; Called on the start of next new game 
+        ; (resets everything)
+        ; --------------------------------------------
+
         ; Set memory to be cleared on Break 
         ; and disable escape key (*FX 200,3)
         ; OSBYTE &C8
@@ -658,7 +1049,7 @@ ORG &0B40
         LDY     #$00
         JSR     OSBYTE
 
-        ; Initialize variables to zero
+        ; Initialize all these lovely variables to zero
         LDA     #$00
         STA     zp_turn_left_counter
         STA     zp_turn_right_counter
@@ -678,11 +1069,13 @@ ORG &0B40
         STA     zp_stage_completed_status
 
         ; Look up the current lap time for completion
-        ; varies by stage and gets less and less per new
-        ; stage.  A stage is 13 laps
+        ; It varies by stage and gets less and less 
+        ; per new stage.  A stage is 12 laps
         LDX     zp_current_lap
         LDA     stage_lap_times,X
         STA     zp_time_remaining_secs
+
+        ; Reduce the lap completion time by 1 time unit (0.64 seconds)
         DEC     zp_time_remaining_secs
 
         ; Set 0 and 1 to the turn right counter...
@@ -690,19 +1083,20 @@ ORG &0B40
         STA     zp_boat_east_west_amount 
         STA     zp_boat_north_south_amount
 
-        ; Set the event handler for interval timer crossing 0 
+        ; Set the event handler EVNTV for 
+        ; interval timer crossing 0 
         ; to be the set timer function
-        LDA     #LO(fn_set_timer_64ms)
-        STA     eventv_lsb_vector
-        LDA     #HI(fn_set_timer_64ms)
-        STA     eventv_msb_vector
+        LDA     #LO(fn_set_timer_64cs)
+        STA     evntv_lsb_vector
+        LDA     #HI(fn_set_timer_64cs)
+        STA     evntv_msb_vector
 
-;L0C57
+;0C57
 .new_stage
         ; Disable interval timer crossing 0 event
         ; timer increments every centisecond - don't 
         ; need this running during game setup, just during
-        ; the game
+        ; the game as no remaining seconds to update until then
         JSR     disable_interval_timer
 
         ; Clear sound channels - for some reason
@@ -729,12 +1123,17 @@ ORG &0B40
         STA     zp_boat_ypos
         STA     zp_map_pos_y
 
-        ; Set start of screen address to &5800 for Mode 5
+        ; Set start of screen address LSB to &xx00 for Mode 5
         LDA     #$00
         STA     zp_screen_start_lsb
+        
+        ; Set boat scroll directions to off for
+        ; for west, south and north (boat is moving east)
         STA     zp_scroll_west_status
         STA     zp_scroll_south_status
         STA     zp_scroll_north_status
+
+        ; Set start of screen address MSB to &58xxfor Mode 5
         LDA     #$58
         STA     zp_screen_start_msb
 
@@ -745,14 +1144,18 @@ ORG &0B40
         LDA     #HI(mode_5_screen_centre)
         STA     zp_screen_centre_msb
 
-        ; Set the statuses that the screen is scrolling
-        ; right and that it's the intro screen
+        ; Set the status that the screen is 
+        ; scrolling right ($FF) as the boat
+        ; faces due East first
+        LDA     #$FF
+        STA     zp_scroll_east_status
+
+        ; Set the status that it's the intro screen
+        STA     zp_intro_screen_status
+
         ; Also set the flag to reset the hazards to 
         ; water tiles (always sets hazards to water tiles 
         ; if the zp_reset-hazards_status is $FF)
-        LDA     #$FF
-        STA     zp_scroll_east_status
-        STA     zp_intro_screen_status
         STA     zp_reset_hazards_status
 
         ; Set the index counter for looping through all the 
@@ -779,14 +1182,14 @@ ORG &0B40
         PLA
         TAX
         INX
+
         ; Check to see if any more hazards to reset, if so
         ; loop onto the next one
         CPX     #$0B
         BNE     reset_next_set_of_hazards
 
         ; If we add hazards to the map now, don't reset them
-        ; to water - always set to water if this flag is $FF 
-        ; otherwise uses the lookup table value
+        ; to water ($00)
         LDA     #$00
         STA     zp_reset_hazards_status
         
@@ -797,17 +1200,19 @@ ORG &0B40
         LDA     #$05
         JSR     OSWRCH
 
-        ; Set the boat speed to 10
+        ; Set the boat speed to 10 ($0A)
         ; Used to scroll the map and also
         ; to change the duration of the boat 'put'
-        ; sound
+        ; sound - boat gets faster as this number
+        ; gets smaller and slowest speed is $0A, 
+        ; fastest $00
         LDA     #$0A
         STA     zp_boat_speed
 
         ; Set the screen to black
         JSR     fn_set_colours_to_black
 
-        ; Change the screen cursor
+        ; Hide the screen cursor
         JSR     fn_hide_cursor        
 
         ; Initialise graphic buffers
@@ -816,25 +1221,27 @@ ORG &0B40
         ; Load the current stage
         LDA     zp_stage_completed_status
 
-        ; Check if starting a new game or a new level
+        ; Check if starting a new game or a new stage
         BEQ     new_game_screen_text
 
         ; Print the next stage text if the player
-        ; has completed 13 laps
+        ; has all the laps in a stage
         JSR     fn_print_next_stage_text
 
         ; Go to game set up
         JMP     game_setup
 
 .new_game_screen_text
+        ; Write "Jet boat" in alternating colours
+        ; all over the screen
         JSR     fn_fill_screen_with_jet_boat               
 
 .game_setup
-        ; Reset current stage
+        ; Reset current stage completed status
         LDA     #$00
         STA     zp_stage_completed_status
 
-        ; Set the game colours
+        ; Set the game colours for the current stage
         JSR     fn_set_game_colours
 
         ; Pause for 2 seconds on the new game or
@@ -850,8 +1257,8 @@ ORG &0B40
         STA     zp_pre_game_scrolling_status
 
         ; Map will be scrolled onto the screen 
-        ; using 40 steps (including 0) - this is because
-        ; in Mode 5 there are 40 / $27 columns of bytes
+        ; using 40 steps - this is because
+        ; in Mode 5 there are  39 / $27 columns of bytes
         LDA     #$27
         STA     zp_scroll_map_steps
 
@@ -860,10 +1267,15 @@ ORG &0B40
         ; text off of the screen and scrolls the start
         ; of game map onto the screen
 
-        ; Reset the following sensors
+        ; Reset the following direction status indicators
+        ; $00 - not moving in that direction
+        ; $FF - moving in that direction
         LDA     #$00
         STA     zp_scroll_south_status
         STA     zp_scroll_north_status
+
+        ; Set the status that the score has not been 
+        ; updated this game loop iteration as it's a new game
         STA     zp_score_already_updated_status
 
         ; Scroll the screen into view one step
@@ -886,18 +1298,19 @@ ORG &0B40
         LDA     #$00
         STA     zp_pre_game_scrolling_status
 
+        ; Intro screen is no longer showing
+        ; so set the status
         LDA     #$00
         STA     zp_intro_screen_status
 
         ; Set the graphics source to the Get Ready Graphic
-        ; (it's stored at 04A0)
+        ; (it's stored at $04A0)
         LDA     #$A0
         STA     zp_graphics_source_lsb
         LDA     #$04
         STA     zp_graphics_source_msb
 
         ; Show the Get Ready icon
-        ; ANDY VALIDATED
         JSR     fn_toggle_boat_or_time_graphic
 
         ; Pause for 2 seconds (show icon for 2 seconds)
@@ -906,32 +1319,45 @@ ORG &0B40
         LDA     #$64
         JSR     fn_wait_for_n_interrupts
 
+        ; Enable the interval timer (that decrements the
+        ; time remaining - time interval set later)
         JSR     fn_enable_interval_timer  
 
-        ; Add a second to the remaining seconds
+        ; Add a time unit to the remaining time (0.64 seconds)
         INC     zp_time_remaining_secs
 
-        ; Start the timer that changes the on screen
-        ; remaining time.
+        ; Start the timer value that changes the on screen
+        ; remaining time - routine is normally called by
+        ; the EVNTV vector and therefore A has to be set
+        ; to $05 so that the routine thinks it is handling
+        ; an "interval timer crossing zero" event - can poke this
+        ; in fn_set_timer_64cs to ignore all events and stop
+        ; the counter counting down
         LDA     #$05
-        JSR     fn_set_timer_64ms   
+        JSR     fn_set_timer_64cs   
         
         ; Play the boat "put put sounds"
         JSR     fn_play_boat_sounds
 
-;L0D16
+;0D16
 .main_game_loop
         ; Use the boat speed to control the map
         ; scrolling steps
         LDA     zp_boat_speed
         STA     zp_scroll_map_steps
-.L0D1A
+
+;0D1A
+.check_time_remaining
         ; Check to see if there is any remaining time
         ; left - continue if there is, otherwise branch ahead
         LDA     zp_time_remaining_secs
         BNE     still_game_time_left
 
-        JSR     fn_scroll_screen_up
+        ; Calculate the bottom row starting memory address
+        ; as the time/score/lap counter will be drawn there
+        ;
+        ; Address is written to write_to_screen_address+1/+2
+        JSR     fn_calc_bottom_row_start_address
 
         ; Wait 20 ms
         JSR     fn_wait_20_ms
@@ -944,7 +1370,7 @@ ORG &0B40
         JSR     fn_toggle_boat_on_screen 
 
         ; Set the source graphics buffer to be
-        ; $0400 where the times up graphic is off screen
+        ; $0400 where the time's up graphic is off screen
         ; buffered
         LDA     #$00
         STA     zp_graphics_source_lsb
@@ -952,7 +1378,6 @@ ORG &0B40
         STA     zp_graphics_source_msb
         
         ; Show the times up icon
-        ; ANDY VALIDATED
         JSR     fn_toggle_boat_or_time_graphic
 
         ; Flush the buffer for sound channel 0
@@ -980,7 +1405,7 @@ ORG &0B40
         LDA     #$64
         JSR     fn_wait_for_n_interrupts
 
-        ; Wait for 2 seconds ($64 / 100 * 20 ms)
+        ; Wait for another 2 seconds ($64 / 100 * 20 ms)
         LDA     #$64
         JSR     fn_wait_for_n_interrupts
 
@@ -991,6 +1416,7 @@ ORG &0B40
         ; and display the high score table
         JSR     fn_did_score_make_high_score_table
 
+        ; Restart the game
         JMP     restart_game
 
 ;0D60    
@@ -1003,15 +1429,17 @@ ORG &0B40
         JSR     fn_play_boat_sounds
 
         DEC     zp_scroll_map_steps
-        BPL     L0D1A
+        BPL     check_time_remaining
 
-        ; Boat speed is from 0 to A
+        ; Boat speed is from 0 (fast) to A (slow)
+        ;
         ; Check the boat speed - if we're at the minimum
         ; speed then don't do anything, otherwise,
         ; every three times around, reduce the speed
         ; (counter intuitively by incrementing this variable)
-        ; 0A is the minimum, 00 is tha maximum
+        ; 0A is the minimum, 00 is the maximum
         LDA     zp_boat_speed
+
         ; Are we at minimum speed of $0A (or higher!), if so branch
         CMP     #$0A
         BCS     post_decelerate_check
@@ -1028,12 +1456,16 @@ ORG &0B40
         LDA     #$00
         STA     zp_decelerate_counter
         INC     zp_boat_speed
-;L0D7E
+
+;0D7E
 .post_decelerate_check
+        ; Check if the boat is moving vertically
         JSR     fn_check_if_moving_north_or_south
 
+        ; Check if the boat is moving horizontally
         JSR     fn_check_if_moving_east_or_west
 
+        ; Scroll the screen and draw the new tiles
         JSR     fn_scroll_screen_and_update
 
         ; Check to see if the stage has been
@@ -1043,14 +1475,20 @@ ORG &0B40
         LDA     zp_stage_completed_status
         BEQ     stage_not_complete
 
+        ; Stage is complete - move to new stage
         JMP     new_stage
 
 ;0D8E
 .stage_not_complete
+        ; Back around the main game loop
         JMP     main_game_loop
 
 ;0D91
 .fn_read_key
+        ; ---------------------------------------------------------
+        ; Check to see if key X is being pressed
+        ; ---------------------------------------------------------
+
         ; OSBYTE &81
         ; Scan keyboard for keypress of key in X
         ; X - negative inkey value of key
@@ -1062,8 +1500,12 @@ ORG &0B40
         LDA     #$81
         JMP     OSBYTE
 
-;L0D98
+;0D98
 .fn_scroll_screen_and_update
+        ; ---------------------------------------------------------
+        ; Check to see if key X is being pressed
+        ; ---------------------------------------------------------
+
         ; Check to see if either scroll up 
         ; or down has been set (ignore if neither
         ; or both). Neat way to check.
@@ -1078,8 +1520,8 @@ ORG &0B40
         BPL     check_down_status
 
         ; Move the boat position up the screen
-        ; If it goes beyond $7F then reset the position
-        ; to the middle of the screen
+        ; If it goes below zero then reset it to
+        ; $4F
         DEC     zp_boat_ypos
         BPL     skip_boat_ypos_reset 
 
@@ -1101,14 +1543,16 @@ ORG &0B40
         STA     copy_graphics_row_target + 1
         LDA     zp_screen_start_msb
         SBC     #$01
+
         ; If we went below $58xx for the screen address
         ; reset it to the end of the screen ($7Fxx)
         JSR     fn_check_screen_start_address
         STA     copy_graphics_row_target + 2
         STA     zp_screen_start_msb
 
-        ; make the boat (x,y) position the map 
-        ; (x,y) position
+        ; Make the boat (x,y) position the map 
+        ; (x,y) position - indicates the centre
+        ; co-ordinates of the map
         LDA     zp_boat_ypos
         STA     zp_map_pos_y
         LDA     zp_boat_xpos
@@ -1120,6 +1564,7 @@ ORG &0B40
 .check_down_status
         ; Check to see if a scroll down should happen
         BIT     zp_scroll_south_status
+
         ; Branch if not
         BPL     check_left_right_status
 
@@ -1130,43 +1575,54 @@ ORG &0B40
         ; If the boat is at position $50 or greater reset it 
         ; as the screen will wrap around
         CMP     #$50
-        BNE     skip_boat_xpos_reset
+        BNE     skip_boat_ypos_reset
 
         ; Reset the boat position
         LDA     #$00
         STA     zp_boat_ypos
 
-.skip_boat_xpos_reset
-        ; TODO Why does it take $140 off and not add on?!?!
+.skip_boat_ypos_reset
+        ; Calculates the address of the start of the
+        ; bottom row of the screen by subtracting
+        ; the length of a row off of the top left
+        ; corner of the visible screen and wrapping
+        ; it around if it is outside of screen memory
         LDA     zp_screen_start_lsb
         SEC
         SBC     #$40
         STA     copy_graphics_row_target + 1
         LDA     zp_screen_start_msb
         SBC     #$01
+        
+        ; Check the result is greater than or equal to
+        ; $5800, if not then wrap it around
         JSR     fn_check_screen_start_address
         STA     copy_graphics_row_target + 2
 
         ; Scrolling down adds $140 to the screen
-        ; start address
+        ; start address for the top left corner
         LDA     zp_screen_start_lsb
         CLC
         ADC     #$40
         STA     zp_screen_start_lsb
         LDA     zp_screen_start_msb
         ADC     #$01
+        
         ; Check it didn't go over $7FFF otherwise
         ; handle the wrapping around
         JSR     fn_check_screen_start_address
         STA     zp_screen_start_msb
 
-        ; Update the vertical position of the boat
-        ; by $1E / 30 (why 1E?)
+        ; Add $1E / 30 to the boat's (x,y) y co-ordinate
+        ; to get the bottom row of the screen's y 
+        ; co-ordinate (can wrap round on the map to the
+        ; start)
         LDA     zp_boat_ypos
         CLC
         ADC     #$1E
-        ; If the boat is at position $50 or greater reset it 
-        ; as the screen will wrap around
+
+        ; If the bottom row y co-ordinate is  greater than
+        ; or equal to $50 (80) then wrap it around
         CMP     #$50
         BCC     skip_boat_ypos_decrement
 
@@ -1175,13 +1631,16 @@ ORG &0B40
         SEC
         SBC     #$50
 .skip_boat_ypos_decrement
+
+        ; Store the bottom row's map y co-ordinate
         STA     zp_map_pos_y
 
         ; Set the map position to the boat position
         LDA     zp_boat_xpos
         STA     zp_map_pos_x
         
-        ; Update the new row that scrolled into view
+        ; Get and store the graphics for the newly
+        ; visible row in the off screen buffer
         JSR     fn_write_x_tiles_to_off_screen_buffer
 
 .check_left_right_status
@@ -1189,11 +1648,13 @@ ORG &0B40
         ; If both, it will be ignored
         LDA     zp_scroll_east_status
         EOR     zp_scroll_west_status
+
         ; If not, branch ahead
         BEQ     scroll_checks_complete
 
         ; Check to see if it's a scroll right
         BIT     zp_scroll_east_status
+        
         ; If it isn't branch ahead
         BPL     check_left_status
 
@@ -1201,16 +1662,17 @@ ORG &0B40
         ; (move it right)
         INC     zp_boat_xpos
         LDA     zp_boat_xpos
+
         ; If the x position of the boat has
         ; gone further than $7F then reset it
         ; to zero (map only exists for 0 =< 0 < $80)
-        BPL     skip_boat_xpos_reset2
+        BPL     skip_boat_xpos_reset
 
         ; Reset the boat x position to zero
         LDA     #$00
         STA     zp_boat_xpos
 
-.skip_boat_xpos_reset2
+.skip_boat_xpos_reset
         ; When scrolling the screen to the right,
         ; calculate where the top right pixels will be
         ; Current screen start address + $140 / 320
@@ -1222,6 +1684,7 @@ ORG &0B40
         STA     copy_graphics_column_target + 1
         LDA     zp_screen_start_msb
         ADC     #$01
+
         ; Check the start address gone beyond $8000
         ; and correct it if it did - only important
         ; for the MSB not the LSB
@@ -1236,6 +1699,7 @@ ORG &0B40
         STA     zp_screen_start_lsb
         LDA     zp_screen_start_msb
         ADC     #$00
+
         ; Check the start address gone beyond $8000
         ; and correct it if it did - only important
         ; for the MSB not the LSB
@@ -1246,11 +1710,12 @@ ORG &0B40
         LDA     zp_boat_ypos
         STA     zp_map_pos_y
 
-        ; Add $27 to the x position 
-        ; TODO WHY?
+        ; Add $27 to the x position of the boat to get
+        ; to the x position of the right hand edge
         LDA     zp_boat_xpos
         CLC
         ADC     #$27
+
         ; $7F is the maximum x co-ordinate
         AND     #$7F
         STA     zp_map_pos_x
@@ -1292,13 +1757,17 @@ ORG &0B40
 
 ;0E85
 .scroll_checks_complete
-        JSR     fn_scroll_screen_up
+        ; Calculate the bottom row starting memory address
+        ; as the time/score/lap counter will be drawn there
+        ;
+        ; Address is written to write_to_screen_address+1/+2
+        JSR     fn_calc_bottom_row_start_address
 
         SEI
         ; Wait 20 milliseconds
         JSR     fn_wait_20_ms
 
-        ; Update the 6845 with the new sceren start address
+        ; Update the 6845 with the new scregen start address
         JSR     fn_set_6845_screen_start_address
 
         ; Check to see if the screen should be scrolled up or down
@@ -1354,9 +1823,12 @@ ORG &0B40
 
 ;0EBB
 .fn_set_6845_screen_start_address
-        ; Changes the screen start address
+        ; ---------------------------------------------------------
+        ; Changes the screen start address 
+        ; on the 6485 CRTC Video Controller. The
         ; screen start address must be divided by 8 
         ; before setting
+        ; ---------------------------------------------------------
 
         ; Set the new screen start address in the 6845
         ; registers 12 and 13
@@ -1382,23 +1854,25 @@ ORG &0B40
         ; and give the MSB of the screen start
         ; address divided by 8
         LDX     #$0C
-        STX     SHEILA_6845_address
-        STA     SHEILA_6845_data
+        STX     SHEILA_6845_ADDRESS
+        STA     SHEILA_6845_DATA
 
         ; Set 6845 Register to 13
         ; and give the LSB of the screen start
         ; address divided by 8
         INX
-        STX     SHEILA_6845_address
+        STX     SHEILA_6845_ADDRESS
         LDA     zp_screen_start_div_8_lsb
-        STA     SHEILA_6845_data
+        STA     SHEILA_6845_DATA
         RTS
 
-;L0EDC
+;0EDC
 .fn_wait_20_ms
+        ; ---------------------------------------------------------
         ; This waits function waits 20 ms for an 
         ; interrupt from CA1 on the System VIA
         ; There's an interrupt every 20ms
+        ; ---------------------------------------------------------
 
         ; Disable the CA1 interrupt on the System VIA
         ; 00000010
@@ -1408,6 +1882,7 @@ ORG &0B40
 
         ; Call SHEILA FE4E (Write only)
         STA     SYS_VIA_INT_ENABLE
+
 .loop_wait_disable_ca1
         ; Check SHEILA FE4D Interrupt Register
         ; on the System VIA.  Waits until the register
@@ -1425,12 +1900,15 @@ ORG &0B40
         STA     SYS_VIA_INT_ENABLE
         RTS
 
-;L0EEC
+;0EEC
 .fn_copy_tile_column_to_screen
+        ; ---------------------------------------------------------
         ; $0900 is the tile buffer for columns
         ; Tiles are assembled here before writing to the 
-        ; screen
-        ; Write the load address 
+        ; screen. Copy from the offscreen buffer to the screen
+        ; ---------------------------------------------------------
+
+        ; Write the load address for the buffer
         LDA     #$00
         STA     copy_graphics_column_source + 1
         LDA     #$09
@@ -1455,7 +1933,7 @@ ORG &0B40
         DEY
         BPL     loop_copy_graphics_column_next_byte
 
-;L0F03
+;0F03
         ; Load the LSB for the screen write address
         ; as we are going to change the location to 
         ; the next Mode 5 row of 8 bytes by adding $140
@@ -1488,7 +1966,7 @@ ORG &0B40
         ADC     #$28
         BCC     store_column_new_screen_write_address_msb
 
-;L0F1D
+;0F1D
 .handle_column_screen_write_overflow
         ; Screen write address was higher than
         ; top of screen memory, so loop it to the 
@@ -1516,6 +1994,10 @@ ORG &0B40
 
 ;$0F2F
 .fn_check_joystick_left
+        ; ---------------------------------------------------------
+        ; Check to see if the player has moved the joystick to the
+        ; left
+        ; ---------------------------------------------------------
 	; OSBYTE &80 reads the ADC chip
 	; Reading channel 1 the x axis of the joystick
 	; This part checks for left
@@ -1533,6 +2015,10 @@ ORG &0B40
 
 ;0F3C
 .fn_check_joystick_right
+        ; ---------------------------------------------------------
+        ; Check to see if the player has moved the joystick to the
+        ; right
+        ; ---------------------------------------------------------
 	; OSBYTE &80 reads the ADC chip
 	; Reading channel 1 the x axis of the joystick
 	; This part checks for right
@@ -1557,6 +2043,10 @@ ORG &0B40
 
 ;0F4D
 .fn_check_joystick_button
+        ; ---------------------------------------------------------
+        ; Check to see if the player has pressed the joystick
+        ; button
+        ; ---------------------------------------------------------
 	; OSBYTE &80 reads the ADC chip
 	; Reading channel 0 detects if the joystick
         ; button has been pressed (ok technically
@@ -1578,12 +2068,17 @@ ORG &0B40
         BEQ     no_left_or_right_detected
         BNE     left_or_right_detected
 
-;L0F5B
+;0F5B
 .fn_copy_tile_row_to_screen
+        ; ---------------------------------------------------------
+        ; Copy the tiles that have been buffered off screen
+        ; to the bottom or top of the screen
+        ; ---------------------------------------------------------
         ; Get the copy graphics target MSB
         ; Check to see if we're on the last row of the screen?
         LDA     copy_graphics_row_target + 2
         CMP     #$7E
+
         ; If the screen write address is before $7E00 we can
         ; bulk copy 
         ; If A < $ 7E then branch
@@ -1597,7 +2092,7 @@ ORG &0B40
         CMP     #$AA
         BCS     byte_copy_tile_row_to_screen
 
-;L0F6B
+;0F6B
 .bulk_copy_tile_row_to_screen
         ; The 320 bytes that will be copied will not cross 
         ; the screen     threshold so this section bulk copies
@@ -1690,7 +2185,7 @@ ORG &0B40
 
         RTS
 
-;L0FC9
+;0FC9
 .byte_copy_tile_row_to_screen
         ; The 320 bytes that will be copied WILL cross 
         ; the screen threshold so this section checks after
@@ -1790,7 +2285,9 @@ ORG &0B40
 
 ;1014
 .fn_wait_for_n_interrupts
-        ; Wait for n * 20 ms
+        ; ---------------------------------------------------------
+        ; Wait for n * 20ms 
+        ; ---------------------------------------------------------
         STA     zp_wait_interrupt_count
 .loop_wait_for_interrupt
         JSR     fn_wait_20_ms
@@ -1800,10 +2297,12 @@ ORG &0B40
 
         RTS
 
-;L101E
+;101E
 .fn_copy_time_score_lap_to_screen
+        ; ---------------------------------------------------------
         ; Copy the buffered graphics for the remaining time,
         ; the score and the lap total to the screen
+        ; ---------------------------------------------------------
         ;
         ; All these graphics are buffered in $0A00 to $0B3F
         LDA     #graphics_buffer_start MOD 256
@@ -1853,7 +2352,6 @@ ORG &0B40
         ; is greater than or equals the bottom of screen 
         ; memory which is $5800
         CMP     #$58
-; L104B
         BCS     update_screen_start_address_msb
 
         ; Underflow of screen so wrap it to the 
@@ -1895,7 +2393,9 @@ ORG &0B40
 
 ;1068
 .fn_hide_cursor
-        ; Hide the cursor 
+        ; ---------------------------------------------------------
+        ; Hide the cursor using a VDU 23 command
+        ; ---------------------------------------------------------
         ; VDU 23 parameters are read from memory
         LDX     #$00
 .loop_vdu_23_hide_cursor_param
@@ -1925,11 +2425,14 @@ ORG &0B40
         EQUB    $00,$00
 
 .fn_set_game_colours
-        ; Use the current stage to change the palettle
+        ; ---------------------------------------------------------
+        ; Use the current stage to change the palette
         ; Load value and keep the bottom two bits
         ; Pulls a column of colours from the banks
         ; X is used a the counter into which colour
         ; scheme will be used - there are 4 to choose from
+        ; ---------------------------------------------------------
+        ; Get the current stage
         LDA     zp_current_stage
         AND     #$03
         TAX
@@ -1939,7 +2442,6 @@ ORG &0B40
         STA     palette_physical_colour
         LDA     #$00
         STA     palette_logical_colour
-
 
         ; Change logical colour 0
         JSR     fn_change_colour_palette
@@ -1964,6 +2466,9 @@ ORG &0B40
         JMP     fn_change_colour_palette
 
 .fn_change_colour_palette
+        ; ---------------------------------------------------------
+        ; Call OSWORD &0C to change the colour palette
+        ; ---------------------------------------------------------
         ; Preserve X and A
         TXA
         PHA
@@ -1981,8 +2486,14 @@ ORG &0B40
         TAX
         RTS
 
-        ; taken as a column not a row for the colours
-        ; so possible combinations are:
+        ; Colour_bank_n contains the physical colours
+        ; logical colour n can be set to based on the 
+        ; bottom two bits of the stage number (zero based)
+        ; 
+        ; Hence taken as a column not a row for the colours
+        ; for a stage (Logical colour 0 always set to blue)
+        ;
+        ; So possible combinations are:
         ; 1. blue, yellow, red, white
         ; 2. blue, yellow, green, white
         ; 3. blue, magenta, white, yellow
@@ -2005,8 +2516,8 @@ ORG &0B40
 .palette_physical_colour        
         EQUB    $00
 .palette_future_use_padding
-        ; should always be set to zero as reserved
-        ; for future use and don't do anything on 
+        ; Should always be set to zero as reserved
+        ; for future use and doesn't do anything on 
         ; a BBC B
         EQUB    $00,$00,$00
 
@@ -2016,6 +2527,9 @@ ORG &0B40
 
 ;10D6
 .fn_update_score
+        ; ---------------------------------------------------------
+        ; Update's the player's score
+        ; ---------------------------------------------------------
         ; If it's the pre-game scrolling then
         ; don't update the score
         BIT     zp_pre_game_scrolling_status
@@ -2037,7 +2551,7 @@ ORG &0B40
 
         ; Only allow a maximum addition of 200 to the score
         ; (note scores are stored divided by 10) per lap
-        ; So don't update if it's already bee updated
+        ; So don't update if it's already been updated
         ; $14 / 20 times
         LDA     zp_score_max_lap_limit
         CMP     #$14
@@ -2063,6 +2577,7 @@ ORG &0B40
         JMP     fn_draw_current_score
 
 .fn_toggle_boat_or_time_graphic
+        ; ---------------------------------------------------------
         ; Shows or hides the boat, get ready or times up
         ; graphics - depending on which memory address is 
         ; referenced in zp_graphics_source_lsb/msb
@@ -2071,6 +2586,7 @@ ORG &0B40
         ;   $0400 is the times up graphic
         ;   $04A0 is the get ready graphic
         ;   Anything else is the boat graphic
+        ; ---------------------------------------------------------
 
         ; Reset the boat aground status indicator
         LDA     #$00
@@ -2150,26 +2666,24 @@ ORG &0B40
         AND     (zp_general_purpose_lsb),Y
         CMP     (zp_general_purpose_lsb),Y
         BEQ     check_same_as_target
-; 1. Load source graphic
-; 2. Check if source graphic is 0 - if so just write 
-; it to the screen as it's water and will blat whatever is there
-; 3. Otherwise, get what's on the screen already
-; 4. EOR the on-screen byte with what we're going to write there
-; 5. If the result is of the EOR ANDed with the source byte is zero,
-; then it's unchanged so no collision - just write it to the screen to
-; blat whatever is there
-; 6. Otherwise set the run aground flag 
-        ; TODO Don't know what zp_boat_aground_status is...
-        ; Set some flag... 
-        ; And always branch (as it's always negative)
-        ; Different graphic?
-        ; ANDY TODO
-        ; LDA     #$FF
+
+        ; Logic summary:
+        ; 1. Load source graphic
+        ; 2. Check if source graphic is 0 - if so just write 
+        ; it to the screen as it's water and will blat whatever is there
+        ; 3. Otherwise, get what's on the screen already
+        ; 4. EOR the on-screen byte with what we're going to write there
+        ; 5. If the result is of the EOR ANDed with the source byte is zero,
+        ; then it's unchanged so no collision - just write it to the screen to
+        ; blat whatever is there
+        ; 6. Otherwise set the run aground flag 
+
+        ; Set the boat is aground status
         LDA     #$FF
         STA     zp_boat_aground_status
         BMI     write_get_ready_byte_to_screen
 
-;L113F
+;113F
 .check_same_as_target
         ; Load the graphic byte and preserve it back
         ; on the stack too
@@ -2188,7 +2702,7 @@ ORG &0B40
         LDA     #$ff
         STA     zp_boat_aground_status
 
-;L114B
+;114B
 .write_get_ready_byte_to_screen
         ; Write the graphic to the screen
         PLA
@@ -2267,6 +2781,12 @@ ORG &0B40
         RTS
 ;118A
 .fn_screen_scroll_rotate_boat_flash_screen
+        ; --------------------------------------------
+        ; Removes the boat from the screen, checks
+        ; which way it is rotating and redraws it 
+        ; rotated in that direction
+        ; --------------------------------------------
+
         ; Undraw the boat (it's EOR'd)
         JSR     fn_toggle_boat_on_screen
 
@@ -2406,12 +2926,12 @@ ORG &0B40
 
         ; 16 boat graphics for when the boat rotates
         ; around in the following order:
-        ; N, NNW, NW, NWW, W, WSW, SW, SSW
+        ; N, NNW, NW, WNW, W, WSW, SW, SSW
         ; S, SSE, SE, ESE, E, ENE, NE, NNE
         ;
         ; Each graphic is 160 bytes across 4 chunks of 40 bytes
         ;
-        ; 120F
+;120F
 .boat_graphic_location_lsb
         EQUB    $00,$A0,$40,$E0,$80,$20,$C0,$60
         EQUB    $00,$A0,$40,$E0,$80,$20,$C0,$60
@@ -2421,8 +2941,11 @@ ORG &0B40
         EQUB    $1E,$1E,$1F,$1F,$20,$21,$21,$22
         EQUB    $23,$23,$24,$24,$25,$26,$26,$27
 
-;L122F
+;122F
 .fn_toggle_boat_on_screen
+        ; --------------------------------------------
+        ; Draws or removes the boat from the screen
+        ; --------------------------------------------
         ; Reset zp_boat_aground_status to zero       
         LDA     #$00
         STA     zp_boat_aground_status
@@ -2447,7 +2970,7 @@ ORG &0B40
         LDA     #$03
         STA     zp_graphics_chunks_remaining
 
-;L1248
+;1248
 .get_next_graphic_chunk
         ; Each graphic chunk is 5 x 8 bytes = 40 bytes
         ; So loop four times around the inner 8 byte loop
@@ -2527,10 +3050,12 @@ ORG &0B40
 
         RTS
 
-;L128D
+;128D
 .fn_check_keys_and_joystick
+        ; --------------------------------------------
         ; Read key presses and joystick 
         ; and turn or accelerate boat
+        ; --------------------------------------------
 
         ;  TODO 
         ; Seems to scroll the screen the right way
@@ -2578,7 +3103,7 @@ left_key_game = read_left_key+1
         ; If it wasn't then branch ahead to check right
         BNE     check_right
 
-;L12AB
+;12AB
 .turn_left_detected
         ; Detects left key press 6 times in a row
         ; before doing anything - so we don't turn too
@@ -2605,7 +3130,7 @@ left_key_game = read_left_key+1
         ; counter and wraps around at $0F / 16
         AND     #$0F
         STA     zp_boat_direction
-;L12C0
+;12C0
 .check_right
         ; Check to see if the joystick
         ; is pushed right
@@ -2617,7 +3142,6 @@ left_key_game = read_left_key+1
         ; the user defined or default key from the loading
         ; menus - defaults to be Ctrl from the menus
         ; but Z in the code below
-        ;LDX     #$BD
         LDX     #&FE
 right_key_game = read_right_key+1
         JSR     fn_read_key
@@ -2627,7 +3151,7 @@ right_key_game = read_right_key+1
         CPX     #$FF
         BNE     check_accelerate
 
-;L12CE
+;12CE
 .turn_right_detected
         ; Detects right key press 6 times in a row
         ; before doing anything - so we don't turn too
@@ -2653,7 +3177,7 @@ right_key_game = read_right_key+1
         AND     #$0F
         STA     zp_boat_direction
 
-;L12E3
+;12E3
 .check_accelerate
         JSR     fn_check_joystick_button
 
@@ -2675,7 +3199,7 @@ accel_key_game = read_accelerate+1
         CPX     #$FF
         BNE     redraw_screen
 
-;L12F1
+;12F1
 .accelerate_detected
         ; Detects acceleration 6 times in a row
         ; before doing anything - so we don't accelerate too
@@ -2713,8 +3237,9 @@ accel_key_game = read_accelerate+1
         CLI
         RTS
 
-;L1308
+;1308
 .fn_calc_boat_direction_of_motion
+        ; --------------------------------------------
         ; Use the direction of the boat which
         ; is stored as 0 - 15, to lookup
         ; which function we should call
@@ -2722,6 +3247,7 @@ accel_key_game = read_accelerate+1
         ; it as an offset from the start of the function lookup
         ; table.  Each function address in the table is 2 bytes 
         ; in the table hence having to double the direction.
+        ; --------------------------------------------
 
         ; The calculates how much east or west or north or south
         ; the boat is going depending on its direction
@@ -2738,7 +3264,7 @@ accel_key_game = read_accelerate+1
         ; Call the calculation function
         JMP     (zp_addr_fn_boat_direction_lsb)
 
-;L131A
+;131A
 .lookup_table_boat_direction_fns
         ; Function look up table?
         EQUB    LO(fn_boat_direction_N), HI(fn_boat_direction_N)
@@ -2758,10 +3284,12 @@ accel_key_game = read_accelerate+1
         EQUB    LO(fn_boat_direction_NW), HI(fn_boat_direction_NW)
         EQUB    LO(fn_boat_direction_NNW), HI(fn_boat_direction_NNW)
 
-; 133A
-; All these functions used to determine the amount
-; in a particular direction the boat is moving
+        ; --------------------------------------------
+        ; All these functions used to determine the amount
+        ; in a particular direction the boat is moving
+        ; --------------------------------------------
 
+;133A
 .fn_boat_direction_N
         ; Boat direction 0 - $133A
         JSR     fn_adjust_east_west_for_full_north_or_south
@@ -2842,86 +3370,108 @@ accel_key_game = read_accelerate+1
         JSR     fn_move_to_half_east
         JMP     fn_accelerate_north
        
-;....
-
-;L139A
+;139A
 .fn_accelerate_south
+        ; --------------------------------------------
+        ; Accelerates South (full speed when 
+        ; zp_boat_north_south_amount is 8)
+        ; --------------------------------------------
         LDA     zp_boat_north_south_amount
         JSR     accelerate_south_or_east_by_2
         STA     zp_boat_north_south_amount
         RTS
 
-;L13A2
+;13A2
 .fn_move_to_half_south
-        ; Accelerate south can be all the way
-        ; to full speed (8)
+        ; --------------------------------------------
+        ; Accelerate South but only to a maximum 
+        ; of half speed (6)
+        ; --------------------------------------------
         LDA     zp_boat_north_south_amount
         JSR     move_to_half_east_or_south
         STA     zp_boat_north_south_amount
         RTS
 
-;L13AA
+;13AA
 .fn_accelerate_east
+        ; --------------------------------------------
         ; Accelerates North (full speed when 
         ; zp_boat_north_south_amount is 0)
+        ; --------------------------------------------
         LDA     zp_boat_east_west_amount
         JSR     accelerate_south_or_east_by_2
         STA     zp_boat_east_west_amount
         RTS
 
-;L13B2
+;13B2
 .fn_move_to_half_east
-        ; Accelerate east but only to max
+        ; --------------------------------------------
+        ; Accelerate east but only to a maximum
         ; of half speed (6)
+        ; --------------------------------------------
         LDA     zp_boat_east_west_amount 
         JSR     move_to_half_east_or_south
         STA     zp_boat_east_west_amount 
         RTS
 
-;L13BA
+;13BA
 .fn_accelerate_north
+        ; --------------------------------------------
         ; Accelerates North (full speed when 
         ; zp_boat_north_south_amount is 0)
+        ; --------------------------------------------
         LDA     zp_boat_north_south_amount
         JSR     accelerate_north_or_west_by_2
         STA     zp_boat_north_south_amount
         RTS
 
-;L13C2
+;13C2
 .fn_move_to_half_north
+        ; --------------------------------------------
+        ; Accelerate North but only to a maximum
+        ; of half speed (2)
+        ; --------------------------------------------
         LDA     zp_boat_north_south_amount
         JSR     set_to_half_west_or_half_north
         STA     zp_boat_north_south_amount
         RTS
 
-;L13CA
+;13CA
 .fn_accelerate_west
+        ; --------------------------------------------
+        ; Accelerate wast but only to a maximum
+        ; of half speed (2)
+        ; --------------------------------------------
         LDA     zp_boat_east_west_amount
         JSR     accelerate_north_or_west_by_2
         STA     zp_boat_east_west_amount
         RTS
 
-;L13D2
+;13D2
 .fn_move_to_half_west
+        ; --------------------------------------------
         ; Sets the east/west amount to 2 
         ; (half west)
+        ; --------------------------------------------
         LDA     zp_boat_east_west_amount 
         JSR     set_to_half_west_or_half_north
         STA     zp_boat_east_west_amount 
         RTS
 
-;L13DA
+;13DA
 .fn_adjust_east_west_for_full_north_or_south
+        ; --------------------------------------------
         ; If the boat was previously moving left or right
         ; do nothing (4 means neither left or right)
         ; otherwise branch and adjust towards no left / right
+        ; --------------------------------------------
         LDA     zp_boat_east_west_amount 
         CMP     #$04
         BNE     check_if_heading_east_or_west
 
         RTS
 
-;L13E1
+;13E1
 .check_if_heading_east_or_west
         ; If A is less than 4
         ; If the boat was turning left
@@ -2931,19 +3481,20 @@ accel_key_game = read_accelerate+1
         ; Otheriwse if the Boat is turning right 
         BCS     fn_move_to_half_west    
 
-;L13E5
+;13E5
 .fn_adjust_north_south_for_full_east_or_west
+        ; --------------------------------------------
         ; If the boat was previously moving east or west
         ; do nothing (4 means neither east or west)
         ; otherwise branch and adjust towards east/west
-
+        ; --------------------------------------------
         LDA     zp_boat_north_south_amount
         CMP     #$04
         BNE     check_if_heading_north_or_south
 
         RTS
 
-;L13EC
+;13EC
 .check_if_heading_north_or_south
         ; Carry not set so it was moving South
         BCC     fn_move_to_half_south
@@ -2951,7 +3502,7 @@ accel_key_game = read_accelerate+1
         ; Carry not set so it was moving North
         BCS     fn_move_to_half_north
 
-;L13F0
+;13F0
 .accelerate_south_or_east_by_2
         ; Changes the speed by +2 
         ; For up down, that 0-3 is Up, 4 neither, 5-8 Down
@@ -2963,7 +3514,7 @@ accel_key_game = read_accelerate+1
 
         RTS
 
-;L13F8
+;13F8
 .reset_to_max_if_greater
         ; If greater than the max of 8 reset to 8
         LDA     #$08
@@ -2981,12 +3532,12 @@ accel_key_game = read_accelerate+1
 
         RTS           
 
-;L1403
+;1403
 .set_to_half_east_or_half_north
         LDA     #$06
         RTS
 
-;L1406
+;1406
 .accelerate_north_or_west_by_2
         ; Changes the speed by -2 
         ; For up down, that 0-3 is Up, 4 neither, 5-8 Down
@@ -2997,24 +3548,27 @@ accel_key_game = read_accelerate+1
 
         RTS
 
-;L140C
+;140C
 .reset_to_zero_if_negative
         ; If negative, rest to zero
         LDA     #$00
         RTS
 
-;L140F
+;140F
 .set_to_half_west_or_half_north
         ; Max North or West is 0, neutal is 4
         LDA     #$02
         RTS      
 
-; BUG?!?! Never called and inaccessible
+;1412
+        ; Unused. BUG?!?! Never called and inaccessible
         LDA     #$02
         RTS        
 
-;L1415
+;1415
 .fn_check_if_moving_north_or_south
+
+        ; --------------------------------------------
         ; The zp_boat_north_south_amount flag is set from 0 to 8
         ; 0 - moving fully up
         ; ...
@@ -3027,6 +3581,7 @@ accel_key_game = read_accelerate+1
         ; If 3,4,5 do nothing
         ; If 2 it will move up every other time through this loop
         ; If 1 it will move full speed up
+        ; --------------------------------------------
 
         ; Reset the up and down scrolling status flags
         LDA     #$00
@@ -3048,7 +3603,7 @@ accel_key_game = read_accelerate+1
         STA     zp_scroll_south_status
         RTS
 
-;L1426
+;1426
 .check_partial_south_direction
         ; Check to see if the boat is facing partially down
         ; Needs to have a value greater than or equal
@@ -3073,11 +3628,11 @@ accel_key_game = read_accelerate+1
         LDA     #$FF
         STA     zp_scroll_south_status        
 
-;L1438
+;1438
 .calc_north_south_boat_direction_of_motion_return
         RTS
 
-;L1439
+;1439
 .check_neither_north_nor_south
         ; Check to see if it's 3,4,5 (given previous checks)
         ; if so do nothing otherwise branch
@@ -3087,7 +3642,7 @@ accel_key_game = read_accelerate+1
 
         RTS
 
-;L143E
+;143E
 .check_partial_north_direction
         CMP     #$02
         ; If less than 2 then branch (full speed up)
@@ -3103,15 +3658,16 @@ accel_key_game = read_accelerate+1
         STA     zp_north_or_south_on_this_loop_status
         BNE     calc_north_south_boat_direction_of_motion_return
 
-;L144C 
+;144C 
 .full_north_direction
         ; Boat is scrolling up so set the status flag
         LDA     #$FF
         STA     zp_scroll_north_status
         RTS        
 
-;L1451
+;1451
 .fn_check_if_moving_east_or_west
+        ; --------------------------------------------
         ; The zp_boat_east_west_amount flag is set from 0 to 8
         ; 0 - moving fully left
         ; ...
@@ -3124,6 +3680,7 @@ accel_key_game = read_accelerate+1
         ; If 3,4,5 do nothing
         ; If 2 it will move left every other time through this loop
         ; If 1 it will move full speed left
+        ; --------------------------------------------
 
         ; Reset the left and right scrolling status flags
         LDA     #$00
@@ -3145,7 +3702,7 @@ accel_key_game = read_accelerate+1
         STA     zp_scroll_east_status
         RTS
 
-;L1462
+;1462
 .check_partial_east_direction
         ; Check to see if the boat is facing partially right
         ; Needs to have a value greater than or equal
@@ -3168,11 +3725,11 @@ accel_key_game = read_accelerate+1
         ; is facing partly right
         LDA     #$FF
         STA     zp_scroll_east_status
-;L1474
+;1474
 .calc_east_west_boat_direction_of_motion_return
         RTS
 
-;L1475
+;1475
 .check_neither_east_nor_west
         ; Check to see if it's 3,4,5 (given previous checks)
         ; if so do nothing otherwise branch
@@ -3182,7 +3739,7 @@ accel_key_game = read_accelerate+1
 
         RTS
 
-;L147A
+;147A
 .check_partial_west_direction
         CMP     #$02
         ; If less than 2 then branch (full speed up)
@@ -3198,17 +3755,19 @@ accel_key_game = read_accelerate+1
         STA     zp_east_or_west_on_this_loop_status
         BNE     calc_east_west_boat_direction_of_motion_return
 
-;L1488
+;1488
 .full_left_direction
         ; Boat is scrolling left so set the status flag
         LDA     #$FF
         STA     zp_scroll_west_status
         RTS
 
-;L148D
+;148D
 .fn_colour_cycle_screen
+        ; --------------------------------------------
         ; When the boat has run aground, colour cycle
         ; the palette
+        ; --------------------------------------------
 
         ; Reset the colour cycle counter to 4 (this routine
         ; is only called when it counts down to 0)
@@ -3218,7 +3777,6 @@ accel_key_game = read_accelerate+1
         ; OSWORD &07
         ; Play boat aground sound one
         ; Parameters are stored at $14E7
-        ; All sounds use Envelope 2 (2nd parameter)        
         LDX     #sound_boat_aground_first MOD 256
         LDY     #sound_boat_aground_first DIV 256
         LDA     #$07
@@ -3227,7 +3785,6 @@ accel_key_game = read_accelerate+1
         ; OSWORD &07
         ; Play sound two
         ; Parameters are stored at $14EF
-        ; All sounds use Envelope 2 (2nd parameter)   
         LDX     #sound_boat_aground_second MOD 256
         LDY     #sound_boat_aground_second DIV 256
         LDA     #$07
@@ -3242,8 +3799,14 @@ accel_key_game = read_accelerate+1
         ; So it flashes out of turn by setting this first
         LDA     #$03
         STA     palette_logical_colour
-        JSR     fn_scroll_screen_up
 
+        ; Calculate the bottom row starting memory address
+        ; as the time/score/lap counter will be drawn there
+        ;
+        ; Address is written to write_to_screen_address+1/+2
+        JSR     fn_calc_bottom_row_start_address
+
+        ; Redraw the time/score/laps to the screen
         JSR     fn_copy_time_score_lap_to_screen
 
         ; OSBYTE &13 
@@ -3279,10 +3842,14 @@ accel_key_game = read_accelerate+1
         LDA     #$FF
         STA     zp_score_already_updated_status
 
-        ; Scroll the sceen up a row
-        JSR     fn_scroll_screen_up
+        ; Calculate the bottom row starting memory address
+        ; as the time/score/lap counter will be drawn there
+        ;
+        ; Address is written to write_to_screen_address+1/+2
+        JSR     fn_calc_bottom_row_start_address
 
-        ; Redraw the time/score/lap counters
+        ; Redraw the time/score/lap counters in memory
+        ; location calc'd above
         JSR     fn_copy_time_score_lap_to_screen
 
         ; OSWORD &0C / VDU 19
@@ -3327,13 +3894,13 @@ accel_key_game = read_accelerate+1
         ; white, black, cyan, magenta, white
         EQUB    $06,$05,$01,$07,$00,$06,$05,$07
 
-;L14FF
+;14FF
 .fn_init_graphics_buffers
-        ; TODO reference the 0Axx areas with variables
-
+        ; --------------------------------------------
         ; Initialise the graphics buffer to $00
         ; from 0A00 to 0A9F and
         ; from 0AA0 to 0B3F
+        ; --------------------------------------------
         LDA     #$00
         LDY     #$9F
 .clear_graphics_buffer_loop
@@ -3385,6 +3952,7 @@ accel_key_game = read_accelerate+1
         JMP     fn_draw_lap_counter
 
 .fn_calc_digits_for_display
+        ; --------------------------------------------
         ; This function rotates the units, then the 10s
         ; then the 100s etc into the accumulator until
         ; all the digits have been found individually
@@ -3403,6 +3971,7 @@ accel_key_game = read_accelerate+1
         ; Otherwise the number graphics in order are
         ; place in the buffer specified in X and Y no entry
         ; for the caller to move into display memory
+        ; --------------------------------------------
 
         ; Preserve the status register
         PHP
@@ -3577,8 +4146,13 @@ accel_key_game = read_accelerate+1
         PLP
         RTS
 
-.fn_print_high_score_numbers
 ; 15AC
+.fn_print_high_score_numbers
+        ; --------------------------------------------
+        ; Call OSWRCH to write the score digits
+        ; stored on the stack to the screen
+        ; --------------------------------------------
+
         ; The Stack contains the four score 
         ; numbers previously calculated
         ; Values are pulled off highest to 
@@ -3604,8 +4178,9 @@ accel_key_game = read_accelerate+1
         PLP
         RTS
 
-;L15B8
+;15B8
 .fn_draw_current_score
+; TODO TODO TODO
         PHP
         SEI
         LDA     zp_score_lsb
@@ -3631,13 +4206,15 @@ accel_key_game = read_accelerate+1
         PLP
         RTS
 
-;L15DE
+;15DE
 .fn_draw_lap_counter
         ; Gets the lap counter which is zero based
         LDA     zp_current_lap
         CLC
+
         ; Makes it one based for display
         ADC     #$01
+
         ; Store the Lap LSB
         STA     zp_number_for_digits_lsb
 
@@ -3645,6 +4222,7 @@ accel_key_game = read_accelerate+1
         LDA     #$00
         STA     zp_number_for_digits_msb
 
+        ; TODO TODO TODO
         ; 0B18
         ; Only need two digits and this uses
         ; the graphics at 0b18 I think...
@@ -3653,14 +4231,16 @@ accel_key_game = read_accelerate+1
         LDA     #$02
         JMP     fn_calc_digits_for_display
 
-;L15F2
+;15F2
 .fn_draw_time_counter
-        ; called before drawing jet boat text
-        ; called after get ready
-        ; Set counter to 10 / $0D
+        ; --------------------------------------------
+        ; Update the time counter buffer with the 
+        ; remaining time
+        ; --------------------------------------------
         LDA     zp_time_remaining_secs
         STA     zp_number_for_digits_lsb
 
+; TODO TIDY UP
         ; Set 0E to 00
         LDA     #$00
         STA     zp_number_for_digits_msb
@@ -3674,27 +4254,37 @@ accel_key_game = read_accelerate+1
         LDA     #$02
         JMP     fn_calc_digits_for_display
 
-.fn_set_timer_64ms
-        ; EVENTV Interval Timer - called every 64ms
-        ; Accumulator is always set to 5
+;1603
+.fn_set_timer_64cs
+        ; --------------------------------------------
+        ; EVNTV Interval Timer handler 
+        ; 
+        ; Called every 64 centi-seconds
+        ; 
+        ; Accumulator is always set to 5 - anything
+        ; else will stop the clock counting down the 
+        ; first time around
         ;
-        ; Also called independently 
+        ; Also called independently by code... to
+        ; start in the first instance and set up
+        ; the interval timer
+        ; --------------------------------------------
 
         ; Preserve the status registers on the stack
         PHP
 
         ; At the start of the game or new level, 
         ; accumulator is set to 5 so will set up the 
-        ; interval timer to count from 64 seconds
+        ; interval timer to count from 64 milliseconds
 
         ; An interrupt wil be generated when it crosses
         ; zero and this will be called again when that
         ; happens to reset the timer
 
-        ; Looks like a testing artefact to stop the screen
-        ; time decrementing - change to e.g.$04 and it will
-        ; never decrement
-.timer_poke
+        ; Check to see if the event type is 
+        ; "interval timer crossing zero" ($05)
+
+.timer_poke        
         CMP     #$05
         BNE     set_timer_64ms_end
 
@@ -3706,22 +4296,24 @@ accel_key_game = read_accelerate+1
         TYA
         PHA
 
-        ; Set the interval timer to the 5 byte value at
-        ; the location specified here ($1626 / var_int_timer_value)
+        ; Reset the interval timer to another 64 centi-seconds
+        ; using the 5 byte value at the location 
+        ; specified here ($1626 / var_int_timer_value)
         ; X - low byte, Y - high byte
-        ; Defaults to 64 centiseconds
         LDX     #var_int_timer_value MOD 256
         LDY     #var_int_timer_value DIV 256
         LDA     #$04
         JSR     OSWORD
 
-        ; If some counter variable is zero jump ahead
-        ; Seems to be $47 or 71 on first invocation
+        ; If there is no more remaining time
+        ; do nothing and  jump ahead
         LDA     zp_time_remaining_secs
         BEQ     skip_loop
 
-        ; Decrement counter
+        ; Decrement remaining time by one time unit (0.64 seconds)
         DEC     zp_time_remaining_secs
+
+        ; Redraw the time counter on the screen
         JSR     fn_draw_time_counter
 
 .skip_loop
@@ -3758,22 +4350,31 @@ accel_key_game = read_accelerate+1
 
 ; 1633
 .fn_enable_interval_timer
+        ; --------------------------------------------
         ; Enable interval timer crossing 0 event
         ; timer increments every centisecond
+        ; --------------------------------------------
         LDA     #$0E
         LDX     #$05
         LDY     #$00
         JMP     OSBYTE
 
 .disable_interval_timer
+        ; --------------------------------------------
         ; Disable interval timer crossing 0 event
         ; timer increments every centisecond
+        ; --------------------------------------------
         LDA     #$0D
         LDX     #$05
         LDY     #$00
         JMP     OSBYTE
 
 .fn_check_checkpoint_or_lap_complete
+        ; --------------------------------------------
+        ; Checks to see if the mid-map checkpoint or
+        ; the lap position has been reached
+        ; --------------------------------------------
+
         ; Check to see if the checkpoint mid-map
         ; has been reached - if not test for it
         ; Status will be $FF if it's been reached
@@ -3863,14 +4464,17 @@ accel_key_game = read_accelerate+1
         ; Need to have the accumulator set to 05
         ; or it'll ignore setup of the timer
         LDA     #$05
-        JSR     fn_set_timer_64ms
+        JSR     fn_set_timer_64cs
 
         ; Redraw the lap counter with the new
         ; reduced lap time
         JSR     fn_draw_lap_counter
 
-        ; TODO move the screen?
-        JSR     fn_scroll_screen_up
+        ; Calculate the bottom row starting memory address
+        ; as the time/score/lap counter will be drawn there
+        ;
+        ; Address is written to write_to_screen_address+1/+2
+        JSR     fn_calc_bottom_row_start_address
 
         ; Wait 20 ms 
         JSR     fn_wait_20_ms
@@ -3910,26 +4514,45 @@ accel_key_game = read_accelerate+1
         STA     zp_checkpoint_status
         RTS        
 
-;L16AD
+;16AD
 .stage_lap_times
         ; Timings per lap for each stage - each 
         ; stage reduces the lap times but the lap
         ; time stays constant for all laps in a stage
         ; (until it becomes impossible)
+        ;
+        ; Stage Lap times are decremented before the game begins by 1
+        ; so the times are:
+        ; -> 70, 60, 51, 46, 41, 38, 36, 33, 31, 28, 26, 23, 21, 0
         EQUB    $47,$3D,$33,$2E,$29,$26,$24,$21
         EQUB    $1F,$1C,$1A,$17,$15,$01
 
-;L16BB
-.fn_scroll_screen_up
-        ; TODO MAY NOT BE SCROLL MAY BE PREVIOUS LINE
-        ; CALCULATION
+;16BB
+.fn_calc_bottom_row_start_address
+        ; --------------------------------------------
+        ; Calculates the starting memory address for writing the
+        ; time/score/lap counters to the screen - this is 
+        ; one screen row behind the screen start address
+        ; when wrapped back around.
+        ; --------------------------------------------
         ;
-        ; Scroll up a row - can only scroll a full row 
-        ; 16 pixels / 8 bytes at a time up or down because
-        ; the screen register is start address DIV 8
+        ; So if the screen start address (top left) is $5800 then
+        ; the previous row (bottom left of the screen is calculated
+        ; by subtracting $140 (28 characters * 8 bytes for a row)
+        ; and wrapping it around to be between $5800 - $7FFF by
+        ; adding $2800
+        ;
+        ; ($5800 - $140) + $2800 = $7EC0 
+        ; 
+        ; So start of previous row (bottom left of screen) is $7EC0
+        ;
+        ; Similarly if it's scrolled and the start is e.g. $6800 then
+        ; no wrap around is required as the bottom left row address
+        ; will be within screen memory
+        ; 
+        ; ($6800 - $140)  = $66C0
         ; 
         ; Subtract $140 / 320 from the screen start
-        ; address
         LDA     zp_screen_start_lsb
         SEC
         SBC     #$40
@@ -3937,14 +4560,18 @@ accel_key_game = read_accelerate+1
 
         LDA     zp_screen_start_msb
         SBC     #$01
+        ; Wrap the address round to still be in screen memory
+        ; if it's lower than the screen start address
         JSR     fn_check_screen_start_address
         STA     write_to_screen_address + 2
         RTS
 
 ;16CE
-; -------------------------------
-; function - check s / q keys
 .fn_check_sound_keys
+        ; --------------------------------------------
+        ; Check to see if the S or Q keys have been
+        ; pressed and process them
+        ; --------------------------------------------
         ; Check to see if the S key is pressed to turn on sound
         LDX     #$AE
         JSR     fn_read_key
@@ -3977,10 +4604,12 @@ accel_key_game = read_accelerate+1
 .check_sound_keys_end
         ; return to calling code
         RTS
-; end function - check s / q keys
-; -------------------------------
-; function - check f / c keys
+
 .fn_check_freeze_continue_keys
+        ; --------------------------------------------
+        ; Check to see if the F or C keys have been
+        ; pressed and process them
+        ; --------------------------------------------
         ; Check to see if the F key has been pressed
         LDX     #$BC
         JSR     fn_read_key
@@ -4016,20 +4645,24 @@ accel_key_game = read_accelerate+1
         ; Interval timer increments every centisecond
         JSR     fn_enable_interval_timer
 
-        ; Add a second back (guess it's being kind)
+        ; Add a time unit back back (guess it's being kind) - 0.64 seconds
         INC     zp_time_remaining_secs
         ; If the accumulator is set to anything other than
         ; 5 the time will NOT decrement.  Testing artefact
         ; and/or cheat poke
         LDA     #$05
         ; Start the on screen timer coutdown
-        JSR     fn_set_timer_64ms
+        JSR     fn_set_timer_64cs
 
 .check_freeze_keys_end
         RTS
-; end function - check f / c keys
-;L171F
+
+;171F
 .fn_add_time_to_score_and_display
+        ; --------------------------------------------
+        ; Adds the remaining time to the score
+        ; --------------------------------------------
+        ;
         ; Score is stored divided by 10
         ; so if you have 100 it's stored 
         ; as 10.  Units are always zero
@@ -4114,6 +4747,11 @@ accel_key_game = read_accelerate+1
 
 ;1762
 .fn_play_boat_sounds
+        ; --------------------------------------------
+        ; Play the boat "put-put" sound - second
+        ; sound duration is influenced by boat speed
+        ; --------------------------------------------
+
         ; OSWORD &07
         ; Play a sound - first boat 'put'
         ; Parameters are stored at $177C
@@ -4186,6 +4824,10 @@ accel_key_game = read_accelerate+1
 
 ; L1797
 .fn_did_score_make_high_score_table
+        ; --------------------------------------------
+        ; Check to see if the player score made it 
+        ; into the high score table
+        ; --------------------------------------------
         ; Highest 8 scores are stored in memory
 
         ; Load the scores starting at the lowest first
@@ -4226,7 +4868,7 @@ accel_key_game = read_accelerate+1
         CMP     high_score_msb,X
         BEQ     high_score_position_found
 
-;L17B4
+;17B4
 .player_score_greater_than_current_score
         ; Check the next (higher) high score in the table
         ; and see if the player's score is greater than or 
@@ -4341,6 +4983,9 @@ accel_key_game = read_accelerate+1
 
 ; 181F
 .fn_display_high_score_table
+        ; --------------------------------------------
+        ; Show the high score table
+        ; --------------------------------------------
         ; Switch to MODE 7
         LDA     #$16
         JSR     OSWRCH
@@ -4507,8 +5152,12 @@ accel_key_game = read_accelerate+1
         ; End of function
         RTS
 
-;L18B2
+;18B2
 .fn_enter_high_score
+        ; --------------------------------------------
+        ; Get the player to enter their name for
+        ; the high score table
+        ; --------------------------------------------
         ; Switch on CAPS LOCK 
         ; OSBYTE &CA - Read/write keyboard status
         ; Same as *FX 2020,160
@@ -4630,10 +5279,13 @@ accel_key_game = read_accelerate+1
         ; Maximum character value (255)
         EQUB    $FF
 
-;L191F
+;191F
 .fn_show_cursor
+        ; --------------------------------------------
+        ; Switch on the screen cursor
+        ; --------------------------------------------
         LDY     #$00
-;L1921
+;1921
 .vdu_23_show_cursor_param_loop
         LDA     vdu_23_show_cursor_params,Y
         JSR     OSWRCH
@@ -4646,7 +5298,7 @@ accel_key_game = read_accelerate+1
 
         RTS
 
-;L192D
+;192D
 .vdu_23_show_cursor_params
         ; Show the cursor
         ;
@@ -4665,13 +5317,13 @@ accel_key_game = read_accelerate+1
         EQUB    $17,$00,$0A,$72,$00,$00,$00,$00
         EQUB    $00,$00       
 
-;L1937
+;1937
 ; The 8 high scores stored in LSB and MSB locations
 ; Scores are highest to lowest and divided by 10 when stored
 .high_score_lsb
         EQUB    $5E,$2C,$FA,$C8,$64,$4B,$32,$19
 
-;L193F
+;193F
 .high_score_msb
         EQUB    $01,$01,$00,$00,$00,$00,$00,$00
 
@@ -4696,8 +5348,12 @@ accel_key_game = read_accelerate+1
 
 ;19F8
 .fn_display_press_space
+        ; --------------------------------------------
+        ; Display the Press Space or Fire text
+        ; --------------------------------------------
+
         ; Write 40 spaces to the bottom of the Mode 7 screen
-        ; Not sure why this isn't down with OSWRCH like the
+        ; Not sure why this isn't done with OSWRCH like the
         ; rest
         LDX     #$00
         ; Code for space
@@ -4731,7 +5387,7 @@ accel_key_game = read_accelerate+1
         JSR     OSWRCH
 
         LDY     #$00
-;L1A1F
+;1A1F
 .get_next_string_press_space_or_fire_byte
         LDA     string_press_space_or_fire,Y
         ; Have we reached the string termination character?
@@ -4768,6 +5424,10 @@ accel_key_game = read_accelerate+1
 
 ; 1A3F
 .fn_show_player_score_below_high_scores
+        ; --------------------------------------------
+        ; Show player score below the high score table
+        ; --------------------------------------------
+
         ; The high score screen in MODE 7 is
         ; already displayed at this point -
         ; this is to add the "You scored" text
@@ -4787,7 +5447,7 @@ accel_key_game = read_accelerate+1
 
         LDX     #$00
 
-;L1A50
+;1A50
 .get_you_scored_byte
         ; Get each character of the "You scored" string
         ; and output to the screen
@@ -4816,11 +5476,11 @@ accel_key_game = read_accelerate+1
         LDA     #$30
         JMP     OSWRCH
 
-;L1A6D
+;1A6D
 .string_press_space_or_fire
         EQUS    $87,$88,"Press SPACE or FIRE to start",$0D
 
-;L1A8C
+;1A8C
 .string_enter_name
         ; $85 - alphanumeric magenta colour teletext code
         ; $88 - flash text teletext code
@@ -4834,6 +5494,11 @@ accel_key_game = read_accelerate+1
 
 ;1AB1
 .fn_fill_screen_with_jet_boat
+        ; --------------------------------------------
+        ; Repeat the Jet Boat string to fill the Mode 5
+        ; screen in alternating colours
+        ; --------------------------------------------
+
         ; Set initial text colour to red (1)
         LDA     #$01
         STA     zp_text_colour
@@ -4895,8 +5560,10 @@ accel_key_game = read_accelerate+1
         EQUS    " taoB teJ"
 
 .fn_set_colours_to_black
+        ; --------------------------------------------
         ; Set logical colour 3 to black 
         ; and update the palette
+        ; --------------------------------------------
         LDX     #$03
 
 .loop_next_logical_colour
@@ -4917,9 +5584,11 @@ accel_key_game = read_accelerate+1
         RTS
 
 .fn_print_next_stage_text
+        ; --------------------------------------------
         ; Reads from memory and writes on the screen the
         ; Prepare to enter the next stage CONGRATULATIONS!
         ; text
+        ; --------------------------------------------
 
         ; Set index counter to 0
         LDX     #$00
@@ -4946,9 +5615,11 @@ accel_key_game = read_accelerate+1
 
 ;1B47
 .fn_apply_or_reset_hazard_set
+        ; --------------------------------------------
         ; Applies or resets the current hazard set - location of
         ; the hazard configuration is in the X and Y registers
         ; on entry and stored in zero page
+        ; --------------------------------------------
 
         ; Cache the hazard configuration address
         STX     zp_hazard_config_lsb
@@ -5033,7 +5704,7 @@ accel_key_game = read_accelerate+1
         ; Reset the loop counter
         LDX     zp_total_hazard_occurrences
 
-;L1B83
+;1B83
 .loop_copy_hazard_next_instance
         ; Calculate the memory location of the
         ; map where to store the hazard tile based
@@ -5089,7 +5760,7 @@ accel_key_game = read_accelerate+1
 .loop_copy_hazard_next_y_row_tile_types
         LDA     #$00
         STA     zp_hazard_width_index
-;L1BAB
+;1BAB
 .loop_copy_hazard_x_tile_types
         LDA     zp_hazard_first_tile_type,X
 
@@ -5102,7 +5773,7 @@ accel_key_game = read_accelerate+1
         ; We'll reset back to the water tile ($03)
         ; so must be start of game or stage
         LDA     #$03
-;L1BB3
+;1BB3
 .skip_reset_to_water_tile
         ; Copy the tile type to the map and overwrite whatever was there 
         ; before (this either adds part of the hazard or resets it to water)
@@ -5116,7 +5787,7 @@ accel_key_game = read_accelerate+1
         CMP     zp_hazard_num_tiles_width
         BNE     loop_copy_hazard_x_tile_types
 
-
+; TODO TIDY UP
         ; Load 80 value
         LDA     #$80
         ; Set the carry
@@ -5145,28 +5816,30 @@ accel_key_game = read_accelerate+1
 
 ; 1BDB
 .fn_get_hazard_for_index_and_apply_or_reset
+        ; --------------------------------------------
         ; There are 12 entries in the lookup
         ; table - this is used to find the obstacles
         ; per lap in a stage - in each stage there
         ; are more per lap
+        ; --------------------------------------------
         CPX     #$0B
         BCC     get_hazard_for_index_from_lookup_table
 
         RTS
 
-; Find out where in memory the current lap's hazard information is
-; held - e.g. second lap has ducks
+        ; Find out where in memory the current lap's hazard
+        ; information is held - e.g. second lap has ducks
 .get_hazard_for_index_from_lookup_table
         LDY     hazard_lookup_table_msb,X
         LDA     hazard_lookup_table_lsb,X
         TAX
         JMP     fn_apply_or_reset_hazard_set
 
-; The hazard lookup table gives the memory location of 
-; the hazard tile and multiple (x,y) co-ordinate 
-; configuratoin information - each pair of MSB/LSBs 
-; are a different hazard e.g. ducks and are applied cumulatively
-; for each subsequent lap 
+        ; The hazard lookup table gives the memory location of 
+        ; the hazard tile and multiple (x,y) co-ordinate 
+        ; configuratoin information - each pair of MSB/LSBs 
+        ; are a different hazard e.g. ducks and are applied cumulatively
+        ; for each subsequent lap 
 .hazard_lookup_table_lsb
         EQUB    LO(hazard_ducks)
         EQUB    LO(hazard_buoys)
@@ -5228,12 +5901,13 @@ COPYBLOCK main_code_block, main_code_block_end, main_code_block_load
 
 
 
-; ----------------------------------------------------------------------------------------
-; Move Memory One off
-; Currently from 5DC0 ++
-; ----------------------------------------------------------------------------------------
 ORG relocate_code_block_load
+;5DC0
 .relocate_code_block
+        ; ----------------------------------------------------------------------------------------
+        ; Relocate the game code and graphics
+        ; ----------------------------------------------------------------------------------------
+
 	; First time through, var 6 will always
 	; be 0 so will go to L5DD4
 .fn_copy_memory
@@ -5275,8 +5949,8 @@ ORG relocate_code_block_load
 .copy_memory_finished
         RTS
 
-
-.start_point
+;5DE1
+.fn_start_point
         ; Set the mode to MODE 7
         LDA     #$16    
         JSR     OSWRCH
@@ -5423,6 +6097,8 @@ ORG relocate_code_block_load
         ; Wait for user input to start game (in game code)
         JSR     fn_wait_for_intro_input 
 
+        ; Call thew main game entry point (all this relocation
+        ; and intro screen code will die when the game starts)
         JMP     fn_game_start
 
   

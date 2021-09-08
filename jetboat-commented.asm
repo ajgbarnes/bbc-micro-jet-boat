@@ -14,6 +14,8 @@
 ; - Relocation code is from fn_start_point ($5DE1) onwards (all thrown away when game starts)
 ; - Main game entry code is at fn_game_start ($0BF8)
 ; - Main game loop is at main_game_loop ($0D16)
+; - Seems well structured and through through
+; - No overloadng of zero page locations (used for single purposes)
 ;
 ; Timers
 ; ------
@@ -91,7 +93,7 @@
 ; - A boat sprite is therefore (24 x 20) 480 pixels in total
 ; - Boat sprites are stored from $1E00 to $27FF
 ; - Each boat sprite is 120 ($A0) bytes
-; - Lookup table at boat_graphic_location_lsb/msb gives memory location for compass point
+; - Lookup table at boat_sprite_location_lsb/msb gives memory location for compass point
 ; - Boat moves speed is from $0A (slowest) to $00 (fastest), used also as duration for second
 ;   "put" sound so useful to have it in this order
 ;
@@ -183,7 +185,7 @@
 ; 0588	5A7	31	Graphics	Lap graphic
 ; 05A8	05AF	7	Graphics	Blank graphic
 ; 05B0	05E0	48	Unused		
-; 05E0
+; 05E1  05FF
 ; 0600	073F	319	Graphics	Map tile buffer for row
 ; 0740	07E0	160	Graphics	0-9 number graphics
 ; 0800	08FF	511	Unused	        OS SOUND workspace	
@@ -240,7 +242,7 @@
 ; 10D5	10FB	39	fn_update_score
 ; 10FC	117F	132	fn_toggle_get_ready_icon
 ; 118A	120E	133	fn_screen_scroll_rotate_boat_flash_screen
-; 120F	122E	32	boat_graphic_location lookup
+; 120F	122E	32	boat_sprite_location lookup
 ; 122F	128C	94	fn_toggle_boat_on_screen
 ; 128D	1307	123	fn_check_keys_and_joystick
 ; 1308	1319	18	fn_calc_boat_direction_of_motion
@@ -2692,14 +2694,14 @@ ORG &0B40
 
         ; Is the graphic the same as what's on the screen
         ; already? If so, branch ahead to write it...
+        ; otherwise the boat has run aground
         AND     (zp_graphics_tiles_storage_lsb),Y
         CMP     (zp_graphics_tiles_storage_lsb),Y
         BEQ     write_get_ready_byte_to_screen
 
-        ; TODO different graphic?
-        ; ANDY TODO
-        ; LDA     #$FF
-        LDA     #$ff
+        ; Boat has run aground (the graphic comparison
+        ; as different) so set the status flag
+        LDA     #$FF
         STA     zp_boat_aground_status
 
 ;114B
@@ -2844,7 +2846,7 @@ ORG &0B40
         ; branch (do nothing)
         LDA     zp_scroll_south_status
         AND     zp_scroll_north_status
-        BNE     set_boat_rotation_graphic
+        BNE     set_boat_rotation_sprite
 
         ; Check for scroll up (top of screen)
         BIT     zp_scroll_north_status
@@ -2867,7 +2869,7 @@ ORG &0B40
 .check_scroll_down
         ; Scroll for scroll down (bottom of screen)
         BIT     zp_scroll_south_status
-        BPL     set_boat_rotation_graphic
+        BPL     set_boat_rotation_sprite
 
         ; Add $140 bytes to the screen start address
         ; to scroll down (the bottom edge of the screen)
@@ -2883,13 +2885,13 @@ ORG &0B40
         JSR     fn_check_screen_start_address
         STA     zp_screen_centre_msb
 
-.set_boat_rotation_graphic
-        ; Set the source graphic location for the boat
+.set_boat_rotation_sprite
+        ; Set the source sprite location for the boat
         ; based on its current rotation
         LDX     zp_boat_direction
-        LDA     boat_graphic_location_lsb,X
+        LDA     boat_sprite_location_lsb,X
         STA     zp_graphics_source_lsb
-        LDA     boat_graphic_location_msb,X
+        LDA     boat_sprite_location_msb,X
         STA     zp_graphics_source_msb
         ; Write it to the screen
         JSR     fn_toggle_boat_or_time_graphic
@@ -2924,7 +2926,7 @@ ORG &0B40
         DEC     zp_aground_colour_cycle_counter
         RTS
 
-        ; 16 boat graphics for when the boat rotates
+        ; 16 boat sprites for when the boat rotates
         ; around in the following order:
         ; N, NNW, NW, WNW, W, WSW, SW, SSW
         ; S, SSE, SE, ESE, E, ENE, NE, NNE
@@ -2932,12 +2934,12 @@ ORG &0B40
         ; Each graphic is 160 bytes across 4 chunks of 40 bytes
         ;
 ;120F
-.boat_graphic_location_lsb
+.boat_sprite_location_lsb
         EQUB    $00,$A0,$40,$E0,$80,$20,$C0,$60
         EQUB    $00,$A0,$40,$E0,$80,$20,$C0,$60
 
-        ; 121F
-.boat_graphic_location_msb
+; 121F
+.boat_sprite_location_msb
         EQUB    $1E,$1E,$1F,$1F,$20,$21,$21,$22
         EQUB    $23,$23,$24,$24,$25,$26,$26,$27
 
@@ -3039,8 +3041,11 @@ ORG &0B40
         LDA     zp_graphics_tiles_storage_lsb
         ADC     #$18
         STA     zp_graphics_tiles_storage_lsb
+        
         LDA     zp_graphics_tiles_storage_msb
         ADC     #$01
+        ; Check the screen start address didn't go
+        ; higher than $7FFF, if so wrap it around
         JSR     fn_check_screen_start_address
 
         CLC
@@ -3057,9 +3062,9 @@ ORG &0B40
         ; and turn or accelerate boat
         ; --------------------------------------------
 
-        ;  TODO 
-        ; Seems to scroll the screen the right way
-        ; based on the boat's direction
+        ; Sets the acceleration and direction flags 
+        ; (how much in each direction) the boat is moving
+        ; based on the direction the boat tip is facing
         JSR     fn_calc_boat_direction_of_motion
 
         ; Check if the S key has been pressed
@@ -3228,10 +3233,11 @@ accel_key_game = read_accelerate+1
         ; reducing this variable
         DEC     zp_boat_speed
 
-        ; TODO
 ; 1303
 .redraw_screen
-        JSR     set_boat_rotation_graphic
+        ; Based on the current orientation of the boat
+        ; lookup the boat sprite to use
+        JSR     set_boat_rotation_sprite
 
         ; Enable maskable interrupts and return
         CLI
@@ -3916,6 +3922,7 @@ accel_key_game = read_accelerate+1
         ; Copy the TIME icon to the graphics buffer
         LDA     $0568,Y
         STA     $0A08,Y
+
         ; Copy the LAP icon to the graphics buffer
         LDA     $0588,Y
         STA     $0AF8,Y
@@ -3934,21 +3941,29 @@ accel_key_game = read_accelerate+1
         ; 7 bytes
         LDY     #$07
 .buffer_blanks_loop
-        ; TODO Maybe a hangover from the prototype?
-        ; Or a graphics workspace
         ; Just blank areas on load
         LDA     $05A8,Y
+        ; Put blank to the right of the time remaining
         STA     $0A48,Y
+
+        ; Put a blank to the right of the score
         STA     $0AE0,Y
+
+        ; Put a blank to the right of the lap counter
         STA     $0B38,Y
 
+        ; Check we have blanked all the 8 bytes in each location
         DEY
+        ; Loop back if not
         BPL     buffer_blanks_loop
 
+        ; Draw the score on screen
         JSR     fn_draw_current_score
 
+        ; Draw the time on screen
         JSR     fn_draw_time_counter
 
+        ; Draw the lap counter on screen and return
         JMP     fn_draw_lap_counter
 
 .fn_calc_digits_for_display
@@ -3969,12 +3984,12 @@ accel_key_game = read_accelerate+1
         ; to the screen
         ;
         ; Otherwise the number graphics in order are
-        ; place in the buffer specified in X and Y no entry
-        ; for the caller to move into display memory
+        ; placed in the buffer specified in X and Y 
         ; --------------------------------------------
 
         ; Preserve the status register
         PHP
+
         ; Disable maskable interrupts
         SEI
 
@@ -4180,22 +4195,41 @@ accel_key_game = read_accelerate+1
 
 ;15B8
 .fn_draw_current_score
-; TODO TODO TODO
+
+        ; Preserve the processor status onto the stack
         PHP
+
+        ; Stop maskable interrupts
         SEI
+
+        ; Transfer the score into the general
+        ; memory for display
         LDA     zp_score_lsb
         STA     zp_number_for_digits_lsb
         LDA     zp_score_msb
         STA     zp_number_for_digits_msb
+
+        ; Score should be 4 digits wide so set that
         LDA     #$04
+
+        ; Set X and Y to point where the individual 
+        ; digit graphics should be stored.
         LDX     #$90
         LDY     #$0A
+
+        ; Generate the score digits and store at $0A90 onwards
         JSR     fn_calc_digits_for_display
 
         LDA     #$40
         STA     zp_graphics_numbers_lsb
         LDA     #$07
         STA     zp_graphics_numbers_msb
+
+        ; Add a trailing zero to the buffer above
+        ; the fn_calc_digits_for_display will have 
+        ; incremented the address in 
+        ; zp_graphics_numbers_target_storage_lsb/msb
+        ; so write the 16 bytes of the zero there
         LDY     #$0F
 .L15D5
         LDA     (zp_graphics_numbers_lsb),Y
@@ -4203,6 +4237,7 @@ accel_key_game = read_accelerate+1
         DEY
         BPL     L15D5
 
+        ; Pull the processor status onto the stack
         PLP
         RTS
 
@@ -4222,12 +4257,12 @@ accel_key_game = read_accelerate+1
         LDA     #$00
         STA     zp_number_for_digits_msb
 
-        ; TODO TODO TODO
-        ; 0B18
-        ; Only need two digits and this uses
-        ; the graphics at 0b18 I think...
+        ; Buffer the lap digits at $0B18
         LDX     #$18
         LDY     #$0B
+
+        ; Lap counter is only 2 digits wide so set that
+        ; so only two digits are drawn
         LDA     #$02
         JMP     fn_calc_digits_for_display
 
@@ -4240,8 +4275,7 @@ accel_key_game = read_accelerate+1
         LDA     zp_time_remaining_secs
         STA     zp_number_for_digits_lsb
 
-; TODO TIDY UP
-        ; Set 0E to 00
+        ; Reset the number to zero
         LDA     #$00
         STA     zp_number_for_digits_msb
         
@@ -4251,6 +4285,9 @@ accel_key_game = read_accelerate+1
         ; $0A28
         LDX     #$28
         LDY     #$0A
+
+        ; Lap counter is only 2 digits wide so set that
+        ; so only two digits are drawn
         LDA     #$02
         JMP     fn_calc_digits_for_display
 
@@ -4807,7 +4844,8 @@ accel_key_game = read_accelerate+1
 ;1788
 .sound_boat_move_second_pitch
         ; Pitch (LSB MSB)
-        ; TODO Pitch controlled by Envelope 3? 
+        ; Controlled programmitically based
+        ; on boat speed
         EQUB    $00,$00
 
 .sound_boat_move_second_duration
@@ -5707,11 +5745,10 @@ accel_key_game = read_accelerate+1
 ;1B83
 .loop_copy_hazard_next_instance
         ; Calculate the memory location of the
-        ; map where to store the hazard tile based
+        ; map where to store the hazard tile  id based
         ; on the (x,y) co-ordinate
         
         ; Storage address = (y * $FF) / 2 + $3000 + x
-        ; or more simply  =nj
         LDA     #$00
         STA     zp_graphics_tiles_storage_lsb
 
@@ -5719,6 +5756,7 @@ accel_key_game = read_accelerate+1
         ; Take the value we found in memory, divide it by 2
         ; and add $30 / 48 to it and save as the MSB
         LDA     zp_hazard_first_y_coordinate,X
+
         ; Divide A by two
         LSR     A
 
@@ -5780,6 +5818,7 @@ accel_key_game = read_accelerate+1
         STA     (zp_graphics_tiles_storage_lsb),Y
         INY
         INX
+
         ; If there are still horizontal / x tile types to copy
         ; then loop around again 
         INC     zp_hazard_width_index
@@ -5787,31 +5826,48 @@ accel_key_game = read_accelerate+1
         CMP     zp_hazard_num_tiles_width
         BNE     loop_copy_hazard_x_tile_types
 
-; TODO TIDY UP
-        ; Load 80 value
+        ; Each row is 128 tile ids ($80) wide
+        ; 
+        ; Get the start position of the next hazard
+        ; tile role by subtracing of the width of the
+        ; tile from 128.  And then processing that row
+        ;
+        ; Remember that at this point it's pointing to the 
+        ; map to tile id data in memory (not the graphics)
         LDA     #$80
-        ; Set the carry
+
+        ; Set the carry flag
         SEC
-        ; Subtract value of 2E which is one the first time
-        ; so 7F is the result
+
+        ; Subtract the width of the hazard
+        ; from the width of the map
         SBC     zp_hazard_num_tiles_width
         CLC
-        ; Add 7F to 55B2 
+
+        ; Add this to the storage address
         ADC     zp_graphics_tiles_storage_lsb
         STA     zp_graphics_tiles_storage_lsb
+
+        ; Add any carry to the MSB
         LDA     #$00
         ADC     zp_graphics_tiles_storage_msb
         STA     zp_graphics_tiles_storage_msb
+
+        ; Move to the next row of the hazard data
         DEC     zp_hazard_height_index
         LDA     zp_hazard_height_index
+
+        ; If still more to process, loop back around
         BNE     loop_copy_hazard_next_y_row_tile_types
 
+        ; Restore X and move to the next instance of this
+        ; hazard
         PLA
         TAX
         DEX
         BPL     loop_copy_hazard_next_instance
 
-
+        ; All done!
         RTS
 
 ; 1BDB

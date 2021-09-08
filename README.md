@@ -1,6 +1,6 @@
-# Jet Boat - Work in progress
+# Jet Boat Disassembly
 
-This is a disassembly of the **Software Invasion** game **Jet Boat**.  Originally written by **Robert J. Leatherbarrow** in 1984.
+This is a disassembly of the **Software Invasion** game **Jet Boat**.  Originally written by **Robin J. Leatherbarrow** in 1984. It's not perfect, I will massage it over time now I undertstand more, and it may contain some commenting howlers or grammar or spelling mistakes.
 
 I did not intend to decompile and understand its inner workings until revisitng this game some 35 years on, wondering why it juddered all the time and was so unplayable. It turns out that there is an issue with my Analogue Joystick port on my old BBC Model B which creates constant noise - the code always checks both keyboard and joystick input (rather than just switching to the one that started the game).  That's not a problem on good BBC Micro but is on mine and a Master Compact (that doesn't have an analogue port).  I recompiled a version that disabled joystick support for the Master Compact, which can be found on [StarDot](https://stardot.org.uk/forums/viewtopic.php?p=319995#p319995).
 
@@ -8,7 +8,9 @@ You can play the game in your browser here at [bbcmicro.co.uk](http://www.bbcmic
 
 I do not hold the copyright to the original game, only the disassembly labelling and comments.
 
-The commenting isn't quite finished yet - a few little bits left to work and a few zero page variables to name.
+I probably need to review the commenting now I have been through all of the code.  I learnt a great deal going through this code which was nicely structured by Robin. 
+
+I assume too that he had a tool to design the map and chop it into individual tiles. It wouldn't be too hard to write something similar now.
 
 # Disassembly
 
@@ -17,6 +19,12 @@ I used the [BeedDis](https://github.com/prime6809/BeebDis) by *Phill Harvey-Smit
 I also used [HxD for Window](https://mh-nexus.de/en/hxd/) for inspecting the original binary and comparing my new one to it
 
 And all editing was completed in [Visual Studio Code](https://code.visualstudio.com/) and [Simon M's](https://github.com/simondotm) excellent BBC Specific 6502 extension [Beeb VSC](https://marketplace.visualstudio.com/items?itemName=simondotm.beeb-vsc)
+
+I used the [BBC Micro User Guide](https://stardot.org.uk/forums/download/file.php?id=57043) and [New Advanced User Guide](https://stardot.org.uk/forums/download/file.php?id=65551) as references - the versions that *dv8* [remastered after a huge amount of work](https://stardot.org.uk/forums/viewtopic.php?t=17243). Invaluable.
+
+And the [BBC Micro Memory Map](http://mdfs.net/Docs/Comp/BBC/AllMem) by *John Ripley* and *J.G.Harston* was absolutely invaluable.
+
+
 
 # Building
 
